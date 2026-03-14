@@ -20,6 +20,7 @@ from dataset import BirdClefShortClipDataset
 from model import BirdClefModel, get_device
 from typing import Optional
 from augmentation import SpecAugment, TimeShift, Mixup, Compose
+from tracking import MetricsLogger, mlflow_track, attach_logger
 
 
 def parse_args():
@@ -42,6 +43,9 @@ def parse_args():
     parser.add_argument("--pretrained", type=str, default=None, help="Path to pretrained checkpoint")
     parser.add_argument("--warmup_epochs", type=int, default=0, help="Number of warmup epochs")
     parser.add_argument("--early_stopping_patience", type=int, default=0, help="Early stopping patience (0 to disable)")
+    parser.add_argument("--mlflow_experiment", type=str, default="birdclef2026_short", help="MLflow experiment name")
+    parser.add_argument("--mlflow_run_name", type=str, default=None, help="MLflow run name")
+    parser.add_argument("--mlflow_tracking_uri", type=str, default=None, help="MLflow tracking URI")
     return parser.parse_args()
 
 
@@ -140,6 +144,7 @@ def compute_class_weights(labels_df, label_cols, device):
     return weights
 
 
+@mlflow_track(['loss', 'acc'], prefix='train_')
 def train_one_epoch(model, dataloader, criterion, optimizer, device, epoch, augment_transform=None, mixup_alpha=0.0, label_smoothing=0.0):
     """Train for one epoch."""
     model.train()
@@ -188,9 +193,10 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device, epoch, augm
     epoch_loss = running_loss / len(dataloader.dataset)
     epoch_acc = running_corrects / running_total
 
-    return epoch_loss, epoch_acc
+    return {'loss': epoch_loss, 'acc': epoch_acc}
 
 
+@mlflow_track(['loss', 'acc', 'map_at_10', 'f1_at_10'], prefix='val_')
 def validate(model, dataloader, criterion, device):
     """Validate the model with mAP and F1 metrics."""
     model.eval()
@@ -228,11 +234,35 @@ def validate(model, dataloader, criterion, device):
     map_at_10 = compute_map_at_k(all_probs, all_labels, k=10)
     f1_at_10 = compute_f1_at_k(all_probs, all_labels, k=10)
 
-    return epoch_loss, epoch_acc, map_at_10, f1_at_10
+    return {'loss': epoch_loss, 'acc': epoch_acc, 'map_at_10': map_at_10, 'f1_at_10': f1_at_10, 'all_probs': all_probs, 'all_labels': all_labels}
 
 
 def main():
     args = parse_args()
+
+    logger = MetricsLogger(
+        experiment_name=args.mlflow_experiment,
+        run_name=args.mlflow_run_name,
+        tracking_uri=args.mlflow_tracking_uri
+    )
+    logger.start_run()
+
+    logger.log_params({
+        'epochs': args.epochs,
+        'batch_size': args.batch_size,
+        'learning_rate': args.lr,
+        'model': args.model,
+        'dropout': args.dropout,
+        'use_augment': args.use_augment,
+        'mixup_alpha': args.mixup_alpha,
+        'label_smoothing': args.label_smoothing,
+        'use_class_weights': args.use_class_weights,
+        'warmup_epochs': args.warmup_epochs,
+        'early_stopping_patience': args.early_stopping_patience,
+    })
+
+    attach_logger(train_one_epoch, logger)
+    attach_logger(validate, logger)
 
     print(f"Training on short clips with:")
     print(f"  Data dir: {args.data_dir}")
@@ -341,15 +371,23 @@ def main():
         print(f"Epoch {epoch}/{epochs}")
         print('='*50)
 
-        train_loss, train_acc = train_one_epoch(
+        train_result = train_one_epoch(
             model, train_loader, criterion, optimizer, device, epoch,
             augment_transform=augment_transform,
             mixup_alpha=args.mixup_alpha,
             label_smoothing=args.label_smoothing
         )
+        train_loss = train_result['loss']
+        train_acc = train_result['acc']
+        current_lr = optimizer.param_groups[0]['lr']
+        train_result['lr'] = current_lr
         print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}")
 
-        val_loss, val_acc, map_at_10, f1_at_10 = validate(model, val_loader, criterion, device)
+        val_result = validate(model, val_loader, criterion, device)
+        val_loss = val_result['loss']
+        val_acc = val_result['acc']
+        map_at_10 = val_result['map_at_10']
+        f1_at_10 = val_result['f1_at_10']
         print(f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
         print(f"Val mAP@10: {map_at_10:.4f}, Val F1@10: {f1_at_10:.4f}")
 
@@ -369,6 +407,15 @@ def main():
                 'f1_at_10': f1_at_10,
             }, checkpoint_path)
             print(f"Saved best model to {checkpoint_path}")
+            
+            best_metrics = {
+                'epoch': epoch,
+                'val_loss': val_loss,
+                'val_acc': val_acc,
+                'map_at_10': map_at_10,
+                'f1_at_10': f1_at_10,
+            }
+            logger.log_model_checkpoint(checkpoint_path, best_metrics)
         else:
             if args.early_stopping_patience > 0:
                 early_stopping_counter += 1
@@ -379,6 +426,32 @@ def main():
 
         if early_stop:
             break
+
+    print("\nComputing final metrics and artifacts...")
+    final_result = validate(model, val_loader, criterion, device)
+    label_cols = dataset.label_cols
+    taxonomy = pd.read_csv(Path(args.data_dir) / "taxonomy.csv")
+    all_species = taxonomy['primary_label'].tolist()
+    
+    if 'all_probs' in final_result and 'all_labels' in final_result:
+        probs = final_result['all_probs']
+        labels = final_result['all_labels']
+        
+        n_classes = labels.shape[1]
+        cm = np.zeros((n_classes, n_classes), dtype=np.int32)
+        
+        for i in range(len(probs)):
+            top_k_indices = np.argsort(-probs[i])[:10]
+            true_labels = np.where(labels[i] == 1)[0]
+            for pred_idx in top_k_indices:
+                for true_idx in true_labels:
+                    if true_idx < n_classes and pred_idx < n_classes:
+                        cm[true_idx, pred_idx] += 1
+        
+        logger.log_confusion_matrix(cm, all_species)
+        logger.log_class_distribution(dataset.df, label_cols)
+
+    logger.end_run()
 
     print("\nTraining complete!")
     print(f"Best mAP@10: {best_map:.4f}")

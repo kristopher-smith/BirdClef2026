@@ -18,6 +18,9 @@ submission.csv
 *.pth
 *.pt
 *.ckpt
+*.db
+mlruns/
+runs/
 
 # IDE
 .idea/
