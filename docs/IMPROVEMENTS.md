@@ -254,3 +254,69 @@ python src/validate_submission.py --submission submission.csv
 7. `src/train_cv.py`: ✅ 5-fold cross-validation + held-out test (Phase 4)
 8. `src/validate_submission.py`: ✅ Submission validation (Phase 4)
 9. `src/model.py`: ✅ Add EfficientNet-B3 + fix LSP errors (Phase 5)
+10. `src/model_perch.py`: ✅ Add PERCH/YAMNet embeddings (Phase 6)
+11. `src/train.py`: ✅ Add --embedding_model support (Phase 6)
+
+---
+
+## Phase 6: PERCH/YAMNet Embeddings
+
+### Overview
+Add support for pretrained audio embedding models (YAMNet, PERCH) alongside EfficientNet.
+
+### Changes
+
+#### 6.1 Create PERCH/YAMNet Model
+**Files**: `src/model_perch.py` (new)
+
+- `YAMNetEmbedding`: YAMNet audio embedding extraction
+- `BirdClefYAMNetModel`: YAMNet embeddings + classification head
+- `PERCHEmbedding`: PERCH audio embedding (via audioclass)
+- `BirdClefPERCHModel`: PERCH embeddings + classification head
+- `BirdClefSimpleEmbeddingModel`: Simple CNN fallback (no TensorFlow needed)
+- `create_embedding_model()`: Factory function
+
+#### 6.2 Update Training Scripts
+**Files**: `src/train.py`
+
+- Add `--embedding_model` argument (yamnet, perch, simple)
+- Falls back to efficientnet_b0 if dependencies not available
+
+### Requirements
+```bash
+# For PERCH (recommended):
+pip install audioclass[perch,tensorflow]
+
+# For YAMNet only:
+pip install tensorflow tf-keras tensorflow-hub
+```
+
+### Usage
+```bash
+# Train with simple CNN embeddings (no extra deps)
+python src/train.py --embedding_model simple --epochs 20 --use_augment
+
+# Train with PERCH embeddings (recommended)
+python src/train.py --embedding_model perch --epochs 20 --use_augment
+
+# Train with YAMNet embeddings
+python src/train.py --embedding_model yamnet --epochs 20 --use_augment
+
+# Original EfficientNet training still works
+python src/train.py --model efficientnet_b2 --epochs 20
+```
+
+### Testing
+```bash
+# Test simple embedding model
+python -c "from src.model_perch import BirdClefSimpleEmbeddingModel; import torch; m = BirdClefSimpleEmbeddingModel(); print(m(torch.randn(2,1,128,313)).shape)"
+
+# Test YAMNet (requires TensorFlow)
+python -c "from src.model_perch import BirdClefYAMNetModel; import torch; m = BirdClefYAMNetModel(); print(m(torch.randn(2,1,128,313)).shape)"
+```
+
+### Notes
+- YAMNet provides 1024-dim embeddings from pretrained AudioSet
+- Simple embedding model is a lightweight CNN fallback
+- YAMNet is slower (requires TensorFlow) but more accurate
+- Both models handle multi-label classification

@@ -29,6 +29,12 @@ from augmentation import SpecAugment, TimeShift, Mixup, Compose
 from tracking import MetricsLogger, mlflow_track, attach_logger
 from typing import Optional
 
+try:
+    from model_perch import create_embedding_model
+    PERCH_AVAILABLE = True
+except ImportError:
+    PERCH_AVAILABLE = False
+
 
 def upload_to_kaggle(model_path: Path, dataset_slug: str, version_notes: str = ""):
     """Upload or update model to Kaggle dataset."""
@@ -75,7 +81,8 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--num_workers", type=int, default=4)
-    parser.add_argument("--model", type=str, default="efficientnet_b0")
+    parser.add_argument("--model", type=str, default="efficientnet_b0", help="Backbone model (efficientnet_b0/b1/b2/b3 or yamnet/simple)")
+    parser.add_argument("--embedding_model", type=str, default=None, help="Embedding model type (yamnet, simple) - overrides --model")
     parser.add_argument("--dropout", type=float, default=0.3)
     parser.add_argument("--cache_dir", type=str, default="data/cache")
     parser.add_argument("--checkpoint_dir", type=str, default="models")
@@ -96,8 +103,43 @@ def parse_args():
     return parser.parse_args()
 
 
-def get_model(backbone: str, num_classes: int, dropout: float, checkpoint_path: Optional[str] = None):
+def get_model(backbone: str, num_classes: int, dropout: float, checkpoint_path: Optional[str] = None, embedding_model: Optional[str] = None):
     """Create model based on backbone name."""
+    
+    model_type = embedding_model if embedding_model else backbone
+    
+    if model_type in ["yamnet", "perch", "simple"]:
+        if not PERCH_AVAILABLE:
+            print(f"Warning: {model_type} not available. Installing dependencies...")
+            print("Run: pip install audioclass[perch,tensorflow] for PERCH or tensorflow tf-keras for YAMNet")
+            print("Falling back to efficientnet_b0")
+            model_type = "efficientnet_b0"
+        else:
+            from model_perch import create_embedding_model as _create_embedding_model, YAMNET_AVAILABLE, PERCH_AVAILABLE as _PERCH_AVAILABLE
+            
+            if model_type == "yamnet" and not YAMNET_AVAILABLE:
+                print(f"Warning: YAMNet not available (TensorFlow not installed).")
+                print("Run: pip install tensorflow tf-keras tensorflow-hub")
+                print("Falling back to efficientnet_b0")
+                model_type = "efficientnet_b0"
+            elif model_type == "perch" and not _PERCH_AVAILABLE:
+                print(f"Warning: PERCH not available (audioclass not installed).")
+                print("Run: pip install audioclass[perch,tensorflow]")
+                print("Falling back to efficientnet_b0")
+                model_type = "efficientnet_b0"
+            else:
+                model = _create_embedding_model(
+                    model_type=model_type,
+                    num_classes=num_classes,
+                    pretrained=True,
+                    dropout=dropout,
+                )
+                if checkpoint_path:
+                    print(f"Loading pretrained weights from {checkpoint_path}")
+                    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+                    model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+                return model
+    
     model = BirdClefModel(
         num_classes=num_classes,
         backbone=backbone,
@@ -317,6 +359,8 @@ def main():
     print(f"  Batch size: {args.batch_size}")
     print(f"  Learning rate: {args.lr}")
     print(f"  Model: {args.model}")
+    if args.embedding_model:
+        print(f"  Embedding model: {args.embedding_model}")
     print(f"  Augmentations: {args.use_augment}")
     print(f"  Mixup alpha: {args.mixup_alpha}")
     print(f"  Label smoothing: {args.label_smoothing}")
@@ -371,7 +415,7 @@ def main():
         pin_memory=True,
     )
 
-    model = get_model(args.model, len(taxonomy), args.dropout, args.pretrained)
+    model = get_model(args.model, len(taxonomy), args.dropout, args.pretrained, args.embedding_model)
     model = model.to(device)
 
     if args.use_class_weights:
