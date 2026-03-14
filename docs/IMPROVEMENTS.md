@@ -260,6 +260,7 @@ python src/validate_submission.py --submission submission.csv
 13. `src/predict.py`: ✅ Add TTA support (Phase 7)
 14. `src/ensemble.py`: ✅ Model Ensemble (Phase 8)
 15. `src/predict.py`: ✅ Add ensemble support (Phase 8)
+16. `tests/`: ✅ Unit tests (Phase 9)
 
 ---
 
@@ -478,3 +479,58 @@ print(f'Loaded {len(ensemble.models)} models')
 - 2-5% mAP improvement over best single model
 - Combining diverse models (different backbones, pretraining) gives best results
 - Equal weights work well; custom weights can help if one model is stronger
+
+---
+
+## Phase 9: Unit Tests
+
+### Overview
+Comprehensive test suite for all components.
+
+### Test Structure
+```
+tests/
+├── __init__.py
+├── conftest.py          # Pytest fixtures
+├── test_model.py        # Model forward pass, output shapes
+├── test_dataset.py      # Dataset loading, label encoding
+├── test_metrics.py      # mAP, F1 calculations
+├── test_augmentation.py # Augmentation outputs
+├── test_tta.py          # Test-Time Augmentation
+```
+
+### Running Tests
+```bash
+# Run all tests
+pytest tests/ -v
+
+# Run specific test file
+pytest tests/test_model.py -v
+
+# Run with coverage
+pytest tests/ --cov=src --cov-report=html
+```
+
+### Test Coverage
+| Module | Tests | Coverage |
+|--------|-------|----------|
+| `model.py` | 12 | Forward pass, all backbones, output shapes |
+| `metrics.py` | 10 | mAP@10, F1@10, edge cases |
+| `augmentation.py` | 11 | SpecAugment, TimeShift, Mixup |
+| `tta.py` | 14 | TTA transforms, predictions |
+| `dataset.py` | 2 | Module imports |
+
+### Running
+```bash
+# All tests
+python -m pytest tests/ -v
+
+# Quick test (no slow tests)
+python -m pytest tests/ -v -k "not slow"
+```
+
+### Test Results
+```
+============================= test session starts ==============================
+51 passed in ~15s
+```
