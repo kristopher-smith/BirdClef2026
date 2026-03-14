@@ -17,6 +17,7 @@ from tqdm import tqdm
 from dataset import BirdClefDataset
 from model import BirdClefModel, get_device
 from augmentation import SpecAugment, TimeShift, Mixup, Compose
+from tracking import MetricsLogger, mlflow_track, attach_logger
 
 
 def parse_args():
@@ -40,6 +41,9 @@ def parse_args():
     parser.add_argument("--held_out_ratio", type=float, default=0.1, help="Held-out test set ratio")
     parser.add_argument("--warmup_epochs", type=int, default=0, help="Number of warmup epochs")
     parser.add_argument("--early_stopping_patience", type=int, default=0, help="Early stopping patience")
+    parser.add_argument("--mlflow_experiment", type=str, default="birdclef2026_cv", help="MLflow experiment name")
+    parser.add_argument("--mlflow_run_name", type=str, default=None, help="MLflow run name")
+    parser.add_argument("--mlflow_tracking_uri", type=str, default=None, help="MLflow tracking URI")
     return parser.parse_args()
 
 
@@ -174,6 +178,7 @@ def compute_class_weights(labels_df, label_cols, device):
     return torch.FloatTensor(weights).to(device)
 
 
+@mlflow_track(['loss'], prefix='train_')
 def train_one_epoch(model, dataloader, criterion, optimizer, device, augment_transform=None, mixup_alpha=0.0, label_smoothing=0.0):
     model.train()
     running_loss = 0.0
@@ -204,9 +209,10 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device, augment_tra
         optimizer.step()
         running_loss += loss.item() * inputs.size(0)
     
-    return running_loss / len(dataloader.dataset)
+    return {'loss': running_loss / len(dataloader.dataset)}
 
 
+@mlflow_track(['loss', 'map_at_10', 'f1_at_10', 'macro_precision', 'macro_recall'], prefix='val_')
 def validate(model, dataloader, criterion, device, label_cols):
     model.eval()
     running_loss = 0.0
@@ -250,6 +256,32 @@ def validate(model, dataloader, criterion, device, label_cols):
 
 def main():
     args = parse_args()
+
+    logger = MetricsLogger(
+        experiment_name=args.mlflow_experiment,
+        run_name=args.mlflow_run_name,
+        tracking_uri=args.mlflow_tracking_uri
+    )
+    logger.start_run()
+
+    logger.log_params({
+        'epochs': args.epochs,
+        'batch_size': args.batch_size,
+        'learning_rate': args.lr,
+        'model': args.model,
+        'dropout': args.dropout,
+        'folds': args.folds,
+        'held_out_ratio': args.held_out_ratio,
+        'use_augment': args.use_augment,
+        'mixup_alpha': args.mixup_alpha,
+        'label_smoothing': args.label_smoothing,
+        'use_class_weights': args.use_class_weights,
+        'warmup_epochs': args.warmup_epochs,
+        'early_stopping_patience': args.early_stopping_patience,
+    })
+
+    attach_logger(train_one_epoch, logger)
+    attach_logger(validate, logger)
     
     print(f"Cross-validation training:")
     print(f"  Folds: {args.folds}")
@@ -461,6 +493,8 @@ def main():
         with open(per_class_path, 'w') as f:
             json.dump(per_class_metrics, f, indent=2)
         print(f"\nPer-class metrics saved to {per_class_path}")
+
+    logger.end_run()
 
 
 if __name__ == "__main__":
