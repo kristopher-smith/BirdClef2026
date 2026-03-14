@@ -205,7 +205,7 @@ python src/train.py --model efficientnet_b2 --epochs 30 --batch_size 12 --use_au
 | `--epochs` | Number of training epochs | 10 |
 | `--batch_size` | Batch size | 16/32 |
 | `--lr` | Learning rate | 1e-4 |
-| `--model` | Backbone (efficientnet_b0/b1/b2) | efficientnet_b0 |
+| `--model` | Backbone (efficientnet_b0/b1/b2/b3) | efficientnet_b0 |
 | `--dropout` | Dropout rate | 0.3 |
 | `--use_augment` | Enable SpecAugment + TimeShift | False |
 | `--mixup_alpha` | Mixup alpha (0=disabled) | 0.0 |
@@ -253,3 +253,4 @@ python src/validate_submission.py --submission submission.csv
 6. `src/train.py`: ✅ Add warmup + early stopping (Phase 3)
 7. `src/train_cv.py`: ✅ 5-fold cross-validation + held-out test (Phase 4)
 8. `src/validate_submission.py`: ✅ Submission validation (Phase 4)
+9. `src/model.py`: ✅ Add EfficientNet-B3 + fix LSP errors (Phase 5)
