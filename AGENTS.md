@@ -23,3 +23,6 @@
 - Install dependencies: `pip install -r requirements.txt`
 - Run training: `python src/train.py`
 - Make predictions: `python src/predict.py`
+
+## Improvement Plan
+See [IMPROVEMENTS.md](IMPROVEMENTS.md) for detailed model improvement strategy.
