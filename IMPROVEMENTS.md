@@ -217,6 +217,30 @@ python src/train.py --model efficientnet_b2 --epochs 30 --batch_size 12 --use_au
 | `--cache_dir` | Spectrogram cache directory | data/cache |
 | `--num_workers` | DataLoader workers | 4 |
 
+### Phase 4: Cross-Validation & Validation
+```bash
+# 5-fold cross-validation with held-out test set
+python src/train_cv.py --folds 5 --held_out_ratio 0.1 --epochs 15 --use_augment
+
+# Validate submission file
+python src/validate_submission.py --submission submission.csv
+```
+
+### CV Script Arguments
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--folds` | Number of CV folds | 5 |
+| `--held_out_ratio` | Held-out test set ratio | 0.1 |
+| `--epochs` | Epochs per fold | 10 |
+| `--use_augment` | Enable augmentations | False |
+
+### Validate Submission Arguments
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--submission` | Path to submission CSV | (required) |
+| `--sample_submission` | Path to sample submission | data/birdclef-2026/sample_submission.csv |
+| `--taxonomy` | Path to taxonomy CSV | data/birdclef-2026/taxonomy.csv |
+
 ---
 
 ## Implementation Order
@@ -227,4 +251,5 @@ python src/train.py --model efficientnet_b2 --epochs 30 --batch_size 12 --use_au
 4. `src/train.py`: ✅ Add label smoothing, class weights, pretrained loading
 5. `src/model.py`: ✅ Support EfficientNet-B2 (Phase 3)
 6. `src/train.py`: ✅ Add warmup + early stopping (Phase 3)
-7. `tests/`: Add evaluation tests (mAP, F1, submission validation)
+7. `src/train_cv.py`: ✅ 5-fold cross-validation + held-out test (Phase 4)
+8. `src/validate_submission.py`: ✅ Submission validation (Phase 4)

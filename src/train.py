@@ -1,6 +1,6 @@
 """Training script for BirdClef 2026."""
-## To run:  python src/train.py --num_workers 4
-## New: python src/train.py --num_workers 4 --use_augment --mixup_alpha 0.4 --label_smoothing 0.1 --use_class_weights
+## To run:
+## python src/train.py --num_workers 4 --use_augment --mixup_alpha 0.4 --label_smoothing 0.1 --use_class_weights --model efficientnet_b2 --epochs 30 --batch_size 12 --use_augment --warmup_epochs 3 --early_stopping_patience 5 --folds 5 --held_out_ratio 0.1
 ## With Kaggle upload: python src/train.py --upload_to_kaggle --kaggle_dataset_slug "birdclef2026-model"
 
 
