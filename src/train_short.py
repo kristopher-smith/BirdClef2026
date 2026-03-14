@@ -1,15 +1,10 @@
-"""Training script for BirdClef 2026."""
-## To run:  python src/train.py --num_workers 4
-## New: python src/train.py --num_workers 4 --use_augment --mixup_alpha 0.4 --label_smoothing 0.1 --use_class_weights
-## With Kaggle upload: python src/train.py --upload_to_kaggle --kaggle_dataset_slug "birdclef2026-model"
-
+"""Training script for BirdClef 2026 using short audio clips."""
+## To run:  python src/train_short.py --num_workers 4
 
 import argparse
 import os
 import sys
 import time
-import json
-import subprocess
 from pathlib import Path
 
 import pandas as pd
@@ -21,60 +16,21 @@ from torch.utils.data import DataLoader, Subset
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
-from dataset import BirdClefDataset
+from dataset import BirdClefShortClipDataset
 from model import BirdClefModel, get_device
 from augmentation import SpecAugment, TimeShift, Mixup, Compose
-from typing import Optional
-
-
-def upload_to_kaggle(model_path: Path, dataset_slug: str, version_notes: str = ""):
-    """Upload or update model to Kaggle dataset."""
-    import kaggle
-    
-    dataset_ref = f"krist0phersmith/{dataset_slug}"
-    upload_dir = Path("model_upload")
-    upload_dir.mkdir(exist_ok=True)
-    
-    (upload_dir / "best_model.pt").symlink_to(model_path.resolve())
-    
-    metadata = {
-        "title": "BirdClef2026 Model",
-        "id": dataset_ref,
-        "licenses": [{"name": "CC0-1.0"}]
-    }
-    with open(upload_dir / "dataset-metadata.json", "w") as f:
-        json.dump(metadata, f)
-    
-    try:
-        subprocess.run(
-            ["kaggle", "datasets", "version", "-p", str(upload_dir), "-m", version_notes],
-            check=True
-        )
-        print(f"Successfully updated dataset: {dataset_ref}")
-        return True
-    except subprocess.CalledProcessError:
-        try:
-            subprocess.run(
-                ["kaggle", "datasets", "create", "-p", str(upload_dir)],
-                check=True
-            )
-            print(f"Successfully created dataset: {dataset_ref}")
-            return True
-        except subprocess.CalledProcessError as e:
-            print(f"Failed to upload to Kaggle: {e}")
-            return False
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train BirdClef 2026 model")
+    parser = argparse.ArgumentParser(description="Train BirdClef 2026 on short clips")
     parser.add_argument("--data_dir", type=str, default="data/birdclef-2026")
-    parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--epochs", type=int, default=15)
+    parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--model", type=str, default="efficientnet_b0")
     parser.add_argument("--dropout", type=float, default=0.3)
-    parser.add_argument("--cache_dir", type=str, default="data/cache")
+    parser.add_argument("--cache_dir", type=str, default="data/cache_short")
     parser.add_argument("--checkpoint_dir", type=str, default="models")
     parser.add_argument("--use_cache", action="store_true", default=True)
     parser.add_argument("--test", action="store_true", help="Quick test run with 1 epoch")
@@ -82,13 +38,11 @@ def parse_args():
     parser.add_argument("--label_smoothing", type=float, default=0.0, help="Label smoothing factor")
     parser.add_argument("--mixup_alpha", type=float, default=0.0, help="Mixup alpha (0 to disable)")
     parser.add_argument("--use_class_weights", action="store_true", help="Use class weights for imbalance")
-    parser.add_argument("--pretrained", type=str, default=None, help="Path to pretrained checkpoint for fine-tuning")
-    parser.add_argument("--upload_to_kaggle", action="store_true", help="Upload model to Kaggle after training")
-    parser.add_argument("--kaggle_dataset_slug", type=str, default="birdclef2026-model", help="Kaggle dataset slug")
+    parser.add_argument("--pretrained", type=str, default=None, help="Path to pretrained checkpoint")
     return parser.parse_args()
 
 
-def get_model(backbone: str, num_classes: int, dropout: float, checkpoint_path: Optional[str] = None):
+def get_model(backbone: str, num_classes: int, dropout: float, checkpoint_path: str = None):
     """Create model based on backbone name."""
     model = BirdClefModel(
         num_classes=num_classes,
@@ -277,7 +231,7 @@ def validate(model, dataloader, criterion, device):
 def main():
     args = parse_args()
 
-    print(f"Training with:")
+    print(f"Training on short clips with:")
     print(f"  Data dir: {args.data_dir}")
     print(f"  Epochs: {args.epochs if not args.test else 1}")
     print(f"  Batch size: {args.batch_size}")
@@ -293,16 +247,13 @@ def main():
     print(f"  Device: {device}")
 
     data_dir = Path(args.data_dir)
-    train_labels = pd.read_csv(data_dir / "train_soundscapes_labels.csv")
+    train_csv = data_dir / "train.csv"
+    train_audio = data_dir / "train_audio"
     taxonomy = pd.read_csv(data_dir / "taxonomy.csv")
-    train_audio = data_dir / "train_soundscapes"
 
-    print(f"\nTraining samples: {len(train_labels)}")
-    print(f"Number of classes: {len(taxonomy)}")
-
-    dataset = BirdClefDataset(
+    dataset = BirdClefShortClipDataset(
+        csv_path=str(train_csv),
         audio_dir=str(train_audio),
-        labels_df=train_labels,
         taxonomy_df=taxonomy,
         sample_rate=32000,
         duration=5,
@@ -311,9 +262,12 @@ def main():
         cache_dir=args.cache_dir,
     )
 
+    print(f"\nTraining samples: {len(dataset)}")
+    print(f"Number of classes: {len(taxonomy)}")
+
     indices = list(range(len(dataset)))
     train_indices, val_indices = train_test_split(
-        indices, test_size=0.2, random_state=42
+        indices, test_size=0.1, random_state=42
     )
 
     train_dataset = Subset(dataset, train_indices)
@@ -339,11 +293,12 @@ def main():
     model = model.to(device)
 
     if args.use_class_weights:
-        class_weights = compute_class_weights(dataset.labels_df, dataset.label_cols, device)
+        class_weights = compute_class_weights(dataset.df, dataset.label_cols, device)
         criterion = nn.BCEWithLogitsLoss(pos_weight=class_weights)
         print(f"  Using class weights: min={class_weights.min():.2f}, max={class_weights.max():.2f}")
     else:
         criterion = nn.BCEWithLogitsLoss()
+    
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=args.epochs if not args.test else 1
@@ -354,9 +309,7 @@ def main():
     checkpoint_dir = Path(args.checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    best_val_loss = float('inf')
     best_map = 0.0
-    checkpoint_path = checkpoint_dir / "best_model.pt"
 
     epochs = args.epochs if not args.test else 1
 
@@ -381,7 +334,7 @@ def main():
 
         if map_at_10 > best_map:
             best_map = map_at_10
-            best_val_loss = val_loss
+            checkpoint_path = checkpoint_dir / "best_short_clip_model.pt"
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -394,13 +347,7 @@ def main():
             print(f"Saved best model to {checkpoint_path}")
 
     print("\nTraining complete!")
-    print(f"Best validation loss: {best_val_loss:.4f}")
     print(f"Best mAP@10: {best_map:.4f}")
-
-    if args.upload_to_kaggle:
-        print("\nUploading model to Kaggle...")
-        version_notes = f"Trained with {args.model}, mAP@10: {best_map:.4f}, epochs: {epochs}"
-        upload_to_kaggle(checkpoint_path, args.kaggle_dataset_slug, version_notes)
 
 
 if __name__ == "__main__":
