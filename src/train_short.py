@@ -18,6 +18,7 @@ from tqdm import tqdm
 
 from dataset import BirdClefShortClipDataset
 from model import BirdClefModel, get_device
+from typing import Optional
 from augmentation import SpecAugment, TimeShift, Mixup, Compose
 
 
@@ -39,10 +40,12 @@ def parse_args():
     parser.add_argument("--mixup_alpha", type=float, default=0.0, help="Mixup alpha (0 to disable)")
     parser.add_argument("--use_class_weights", action="store_true", help="Use class weights for imbalance")
     parser.add_argument("--pretrained", type=str, default=None, help="Path to pretrained checkpoint")
+    parser.add_argument("--warmup_epochs", type=int, default=0, help="Number of warmup epochs")
+    parser.add_argument("--early_stopping_patience", type=int, default=0, help="Early stopping patience (0 to disable)")
     return parser.parse_args()
 
 
-def get_model(backbone: str, num_classes: int, dropout: float, checkpoint_path: str = None):
+def get_model(backbone: str, num_classes: int, dropout: float, checkpoint_path: Optional[str] = None):
     """Create model based on backbone name."""
     model = BirdClefModel(
         num_classes=num_classes,
@@ -242,6 +245,8 @@ def main():
     print(f"  Label smoothing: {args.label_smoothing}")
     print(f"  Class weights: {args.use_class_weights}")
     print(f"  Pretrained: {args.pretrained}")
+    print(f"  Warmup epochs: {args.warmup_epochs}")
+    print(f"  Early stopping patience: {args.early_stopping_patience}")
 
     device = get_device()
     print(f"  Device: {device}")
@@ -300,9 +305,24 @@ def main():
         criterion = nn.BCEWithLogitsLoss()
     
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=args.epochs if not args.test else 1
-    )
+    
+    warmup_epochs = args.warmup_epochs if not args.test else 0
+    train_epochs = args.epochs if not args.test else 1
+    
+    if warmup_epochs > 0:
+        warmup_scheduler = optim.lr_scheduler.LinearLR(
+            optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs
+        )
+        main_scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=train_epochs - warmup_epochs
+        )
+        scheduler = optim.lr_scheduler.SequentialLR(
+            optimizer, schedulers=[warmup_scheduler, main_scheduler], milestones=[warmup_epochs]
+        )
+    else:
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=train_epochs
+        )
 
     augment_transform = get_augmentation_transform() if args.use_augment else None
 
@@ -311,7 +331,10 @@ def main():
 
     best_map = 0.0
 
-    epochs = args.epochs if not args.test else 1
+    epochs = train_epochs
+
+    early_stopping_counter = 0
+    early_stop = False
 
     for epoch in range(1, epochs + 1):
         print(f"\n{'='*50}")
@@ -334,6 +357,7 @@ def main():
 
         if map_at_10 > best_map:
             best_map = map_at_10
+            early_stopping_counter = 0
             checkpoint_path = checkpoint_dir / "best_short_clip_model.pt"
             torch.save({
                 'epoch': epoch,
@@ -345,6 +369,16 @@ def main():
                 'f1_at_10': f1_at_10,
             }, checkpoint_path)
             print(f"Saved best model to {checkpoint_path}")
+        else:
+            if args.early_stopping_patience > 0:
+                early_stopping_counter += 1
+                print(f"No improvement. Early stopping counter: {early_stopping_counter}/{args.early_stopping_patience}")
+                if early_stopping_counter >= args.early_stopping_patience:
+                    print(f"Early stopping triggered at epoch {epoch}")
+                    early_stop = True
+
+        if early_stop:
+            break
 
     print("\nTraining complete!")
     print(f"Best mAP@10: {best_map:.4f}")

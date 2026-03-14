@@ -193,10 +193,10 @@ python src/train_short.py --epochs 15 --batch_size 32 --use_augment --mixup_alph
 python src/train.py --epochs 5 --pretrained models/best_short_clip_model.pt --use_augment
 ```
 
-### Phase 3: Larger Backbone
+### Phase 3: Larger Backbone + Training Enhancements
 ```bash
-# Train with EfficientNet-B2
-python src/train.py --model efficientnet_b2 --epochs 30 --batch_size 12 --use_augment
+# Train with EfficientNet-B2, warmup, and early stopping
+python src/train.py --model efficientnet_b2 --epochs 30 --batch_size 12 --use_augment --warmup_epochs 3 --early_stopping_patience 5
 ```
 
 ### Available Arguments
@@ -212,6 +212,8 @@ python src/train.py --model efficientnet_b2 --epochs 30 --batch_size 12 --use_au
 | `--label_smoothing` | Label smoothing factor | 0.0 |
 | `--use_class_weights` | Use inverse frequency weights | False |
 | `--pretrained` | Path to pretrained checkpoint | None |
+| `--warmup_epochs` | Learning rate warmup epochs | 0 |
+| `--early_stopping_patience` | Early stopping patience (0=disabled) | 0 |
 | `--cache_dir` | Spectrogram cache directory | data/cache |
 | `--num_workers` | DataLoader workers | 4 |
 
@@ -224,4 +226,5 @@ python src/train.py --model efficientnet_b2 --epochs 30 --batch_size 12 --use_au
 3. `src/train_short.py`: ✅ Support training on short clips
 4. `src/train.py`: ✅ Add label smoothing, class weights, pretrained loading
 5. `src/model.py`: ✅ Support EfficientNet-B2 (Phase 3)
-6. `tests/`: Add evaluation tests (mAP, F1, submission validation)
+6. `src/train.py`: ✅ Add warmup + early stopping (Phase 3)
+7. `tests/`: Add evaluation tests (mAP, F1, submission validation)
