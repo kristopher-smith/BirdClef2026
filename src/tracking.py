@@ -8,6 +8,7 @@ Works with or without MLflow (graceful fallback).
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 from functools import wraps
 from typing import Optional
@@ -33,7 +34,7 @@ class MetricsLogger:
                  experiment_name: str = "birdclef2026",
                  run_name: Optional[str] = None,
                  tracking_uri: Optional[str] = None,
-                 run_dir: str = "runs"):
+                 run_dir: str = "mlruns"):
         self.experiment_name = experiment_name
         self.run_name = run_name
         self.tracking_uri = tracking_uri
@@ -43,7 +44,8 @@ class MetricsLogger:
         self._run_id = None
         self._epoch_metrics = []
         
-        self.run_dir.mkdir(parents=True, exist_ok=True)
+        if not self.mlflow_available:
+            self.run_dir.mkdir(parents=True, exist_ok=True)
         
     def start_run(self):
         """Start an MLflow run if available, otherwise prepare fallback."""
@@ -77,24 +79,35 @@ class MetricsLogger:
             self._epoch_metrics.append({**metrics, 'step': step})
             
     def log_artifact(self, local_path: str, artifact_name: Optional[str] = None):
-        """Log an artifact file."""
+        """Log an artifact file to MLflow or local fallback."""
         artifact_name = artifact_name or Path(local_path).name
         
         if self.mlflow_available and self._run:
             mlflow.log_artifact(local_path)
+        else:
+            dest = self.run_dir / artifact_name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            import shutil
+            shutil.copy2(local_path, dest)
             
     def log_text(self, text: str, artifact_name: str):
         """Log text content as artifact."""
-        path = self.run_dir / artifact_name
-        path.write_text(text)
-        
         if self.mlflow_available and self._run:
-            mlflow.log_artifact(str(path))
-            
+            with tempfile.NamedTemporaryFile(mode='w', suffix=artifact_name, delete=False) as f:
+                f.write(text)
+                f.flush()
+                mlflow.log_artifact(f.name, artifact_name)
+                os.unlink(f.name)
+        else:
+            path = self.run_dir / artifact_name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+        
     def log_confusion_matrix(self, cm: np.ndarray, labels: list[str], step: Optional[int] = None):
         """Log confusion matrix as artifact (only for present classes)."""
         import matplotlib.pyplot as plt
         import seaborn as sns
+        import tempfile
         
         present_classes = [i for i in range(len(labels)) 
                           if cm[i].sum() > 0 or cm[:, i].sum() > 0]
@@ -115,23 +128,38 @@ class MetricsLogger:
         plt.xticks(rotation=90, fontsize=6)
         plt.yticks(rotation=0, fontsize=6)
         
-        cm_path = self.run_dir / "confusion_matrix.png"
-        plt.savefig(cm_path, bbox_inches='tight')
-        plt.close()
-        
-        self.log_artifact(str(cm_path))
+        if self.mlflow_available and self._run:
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
+                plt.savefig(f.name, bbox_inches='tight')
+                plt.close()
+                mlflow.log_artifact(f.name, 'confusion_matrix.png')
+                os.unlink(f.name)
+        else:
+            cm_path = self.run_dir / "confusion_matrix.png"
+            cm_path.parent.mkdir(parents=True, exist_ok=True)
+            plt.savefig(cm_path, bbox_inches='tight')
+            plt.close()
         
         cm_data = {
             'matrix': cm_filtered.tolist(),
             'labels': labels_filtered
         }
-        cm_json_path = self.run_dir / "confusion_matrix.json"
-        cm_json_path.write_text(json.dumps(cm_data, indent=2))
-        self.log_artifact(str(cm_json_path))
+        
+        if self.mlflow_available and self._run:
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, prefix='confusion_matrix') as f:
+                json.dump(cm_data, f, indent=2)
+                f.flush()
+                mlflow.log_artifact(f.name, 'confusion_matrix.json')
+                os.unlink(f.name)
+        else:
+            cm_json_path = self.run_dir / "confusion_matrix.json"
+            cm_json_path.parent.mkdir(parents=True, exist_ok=True)
+            cm_json_path.write_text(json.dumps(cm_data, indent=2))
         
     def log_spectrogram(self, spec: np.ndarray, artifact_name: str = "sample_spectrogram.png"):
         """Log a spectrogram image."""
         import matplotlib.pyplot as plt
+        import tempfile
         
         fig, ax = plt.subplots(figsize=(10, 4))
         im = ax.imshow(spec, aspect='auto', origin='lower', cmap='viridis')
@@ -139,15 +167,22 @@ class MetricsLogger:
         ax.set_ylabel('Mel bins')
         plt.colorbar(im, ax=ax, label='Magnitude')
         
-        path = self.run_dir / artifact_name
-        plt.savefig(path, bbox_inches='tight')
-        plt.close()
-        
-        self.log_artifact(str(path))
+        if self.mlflow_available and self._run:
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
+                plt.savefig(f.name, bbox_inches='tight')
+                plt.close()
+                mlflow.log_artifact(f.name, artifact_name)
+                os.unlink(f.name)
+        else:
+            path = self.run_dir / artifact_name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            plt.savefig(path, bbox_inches='tight')
+            plt.close()
         
     def log_training_curves(self):
         """Log training curves plot from accumulated metrics."""
         import matplotlib.pyplot as plt
+        import tempfile
         
         if not self._epoch_metrics:
             return
@@ -186,28 +221,44 @@ class MetricsLogger:
         
         plt.tight_layout()
         
-        path = self.run_dir / "training_curves.png"
-        plt.savefig(path)
-        plt.close()
-        
-        self.log_artifact(str(path))
+        if self.mlflow_available and self._run:
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
+                plt.savefig(f.name)
+                plt.close()
+                mlflow.log_artifact(f.name, 'training_curves.png')
+                os.unlink(f.name)
+        else:
+            path = self.run_dir / "training_curves.png"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            plt.savefig(path)
+            plt.close()
         
     def log_model_checkpoint(self, checkpoint_path: Path, metrics: Optional[dict] = None):
         """Log a model checkpoint as artifact."""
         import shutil
+        import tempfile
         
         if not checkpoint_path.exists():
             print(f"[Tracking] Warning: checkpoint {checkpoint_path} not found")
             return
-            
-        dest_path = self.run_dir / checkpoint_path.name
-        shutil.copy2(checkpoint_path, dest_path)
-        self.log_artifact(str(dest_path))
         
-        if metrics:
-            metrics_path = self.run_dir / f"{checkpoint_path.stem}_metrics.json"
-            metrics_path.write_text(json.dumps(metrics, indent=2))
-            self.log_artifact(str(metrics_path))
+        if self.mlflow_available and self._run:
+            mlflow.log_artifact(str(checkpoint_path))
+            if metrics:
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, prefix=f"{checkpoint_path.stem}_metrics") as f:
+                    json.dump(metrics, f, indent=2)
+                    f.flush()
+                    mlflow.log_artifact(f.name, f"{checkpoint_path.stem}_metrics.json")
+                    os.unlink(f.name)
+        else:
+            dest_path = self.run_dir / checkpoint_path.name
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(checkpoint_path, dest_path)
+            
+            if metrics:
+                metrics_path = self.run_dir / f"{checkpoint_path.stem}_metrics.json"
+                metrics_path.parent.mkdir(parents=True, exist_ok=True)
+                metrics_path.write_text(json.dumps(metrics, indent=2))
             
     def log_submission(self, submission_path: Path):
         """Log a submission CSV as artifact."""
@@ -219,15 +270,25 @@ class MetricsLogger:
     def log_predictions(self, predictions: np.ndarray, labels: list[str], artifact_name: str = "predictions.csv"):
         """Log predictions as CSV."""
         import pandas as pd
+        import tempfile
         
         df = pd.DataFrame(predictions, columns=labels)
-        path = self.run_dir / artifact_name
-        df.to_csv(path, index=False)
-        self.log_artifact(str(path))
+        
+        if self.mlflow_available and self._run:
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, prefix='predictions') as f:
+                df.to_csv(f.name, index=False)
+                f.flush()
+                mlflow.log_artifact(f.name, artifact_name)
+                os.unlink(f.name)
+        else:
+            path = self.run_dir / artifact_name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            df.to_csv(path, index=False)
         
     def log_class_distribution(self, labels_df, label_cols, artifact_name: str = "class_distribution.png"):
         """Log class distribution bar chart."""
         import matplotlib.pyplot as plt
+        import tempfile
         
         class_counts = labels_df[label_cols].sum().sort_values(ascending=False)
         
@@ -238,11 +299,17 @@ class MetricsLogger:
         ax.set_title('Class Distribution')
         plt.tight_layout()
         
-        path = self.run_dir / artifact_name
-        plt.savefig(path)
-        plt.close()
-        
-        self.log_artifact(str(path))
+        if self.mlflow_available and self._run:
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
+                plt.savefig(f.name)
+                plt.close()
+                mlflow.log_artifact(f.name, artifact_name)
+                os.unlink(f.name)
+        else:
+            path = self.run_dir / artifact_name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            plt.savefig(path)
+            plt.close()
         
     def end_run(self):
         """End the run."""
