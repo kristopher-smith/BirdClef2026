@@ -38,10 +38,16 @@ class TTATimeShift(TTAAugment):
         if shift == 0:
             return x
         
-        if shift > 0:
-            return torch.cat([x[:, :, shift:], x[:, :, :shift]], dim=2)
+        if x.dim() == 4:
+            if shift > 0:
+                return torch.cat([x[:, :, :, shift:], x[:, :, :, :shift]], dim=3)
+            else:
+                return torch.cat([x[:, :, :, shift:], x[:, :, :, :shift]], dim=3)
         else:
-            return torch.cat([x[:, :, shift:], x[:, :, :shift]], dim=2)
+            if shift > 0:
+                return torch.cat([x[:, :, shift:], x[:, :, :shift]], dim=2)
+            else:
+                return torch.cat([x[:, :, shift:], x[:, :, :shift]], dim=2)
 
 
 class TTAFreqMask(TTAAugment):
@@ -52,13 +58,19 @@ class TTAFreqMask(TTAAugment):
         self.num_masks = num_masks
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
-        _, n_freq, n_time = x.shape
+        if x.dim() == 4:
+            _, _, n_freq, n_time = x.shape
+        else:
+            _, n_freq, n_time = x.shape
         
         for _ in range(self.num_masks):
             f = np.random.randint(0, self.freq_mask_param)
             f0 = np.random.randint(0, max(1, n_freq - f))
             x = x.clone()
-            x[:, f0:f0 + f, :] = 0
+            if x.dim() == 4:
+                x[:, :, f0:f0 + f, :] = 0
+            else:
+                x[:, f0:f0 + f, :] = 0
         
         return x
 
@@ -71,13 +83,19 @@ class TTATimeMask(TTAAugment):
         self.num_masks = num_masks
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
-        _, n_freq, n_time = x.shape
+        if x.dim() == 4:
+            _, _, n_freq, n_time = x.shape
+        else:
+            _, n_freq, n_time = x.shape
         
         for _ in range(self.num_masks):
             t = np.random.randint(0, self.time_mask_param)
             t0 = np.random.randint(0, max(1, n_time - t))
             x = x.clone()
-            x[:, :, t0:t0 + t] = 0
+            if x.dim() == 4:
+                x[:, :, :, t0:t0 + t] = 0
+            else:
+                x[:, :, t0:t0 + t] = 0
         
         return x
 

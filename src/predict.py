@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 from model import BirdClefModel, get_device
 from tta import get_tta_transforms, apply_tta_to_predictions
+from ensemble import EnsemblePredictor, create_ensemble_from_config, create_ensemble_from_dir
 
 
 def parse_args():
@@ -28,6 +29,12 @@ def parse_args():
     parser.add_argument("--hop_length", type=int, default=512)
     parser.add_argument("--use_tta", action="store_true", help="Use Test-Time Augmentation")
     parser.add_argument("--tta_augments", type=str, default="original,flip", help="TTA augmentations (comma-separated: original,flip,timeshift,freqmask,timemask)")
+    parser.add_argument("--ensemble", action="store_true", help="Use ensemble of models")
+    parser.add_argument("--ensemble_config", type=str, default=None, help="Path to ensemble config JSON")
+    parser.add_argument("--ensemble_dir", type=str, default="models", help="Directory containing ensemble models")
+    parser.add_argument("--ensemble_pattern", type=str, default="*.pt", help="Glob pattern for ensemble models")
+    parser.add_argument("--ensemble_weights", type=str, default=None, help="Comma-separated weights for ensemble models")
+    parser.add_argument("--ensemble_aggregation", type=str, default="average", choices=["average", "max"], help="Ensemble aggregation method")
     return parser.parse_args()
 
 
@@ -97,7 +104,6 @@ def main():
     
     print(f"Predicting with:")
     print(f"  Data dir: {args.data_dir}")
-    print(f"  Model: {args.model}")
     print(f"  Output: {args.output}")
     print(f"  TTA: {args.use_tta}")
     if args.use_tta:
@@ -114,11 +120,36 @@ def main():
     label_cols = [col for col in sample_sub.columns if col != 'row_id']
     print(f"Number of classes: {len(label_cols)}")
     
-    model = BirdClefModel(num_classes=len(label_cols), pretrained=False)
-    checkpoint = torch.load(args.model, map_location=device)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model = model.to(device)
-    print(f"Loaded model from epoch {checkpoint.get('epoch', 'unknown')}")
+    # Load model(s) - single or ensemble
+    predictor = None
+    if args.ensemble:
+        print(f"  Ensemble: enabled")
+        if args.ensemble_config:
+            predictor = create_ensemble_from_config(
+                args.ensemble_config,
+                num_classes=len(label_cols),
+                device=device,
+            )
+        else:
+            weights = None
+            if args.ensemble_weights:
+                weights = [float(w) for w in args.ensemble_weights.split(",")]
+            predictor = create_ensemble_from_dir(
+                args.ensemble_dir,
+                num_classes=len(label_cols),
+                device=device,
+                pattern=args.ensemble_pattern,
+                weights=weights,
+                aggregation=args.ensemble_aggregation,
+            )
+        print(f"  Ensemble: {len(predictor.models)} models loaded")
+    else:
+        print(f"  Model: {args.model}")
+        model = BirdClefModel(num_classes=len(label_cols), pretrained=False)
+        checkpoint = torch.load(args.model, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        model = model.to(device)
+        print(f"Loaded model from epoch {checkpoint.get('epoch', 'unknown')}")
     
     test_dir = data_dir / "test_soundscapes"
     
@@ -164,6 +195,8 @@ def main():
             predictions = []
             
             tta_transforms = None
+            use_predictor = predictor is not None
+            
             if args.use_tta:
                 tta_transforms = get_tta_transforms(args.tta_augments)
                 print(f"Using {len(tta_transforms)} TTA transforms")
@@ -171,7 +204,12 @@ def main():
             for i in range(0, len(specs_tensor), batch_size):
                 batch = specs_tensor[i:i+batch_size].to(device)
                 with torch.no_grad():
-                    if args.use_tta and len(tta_transforms) > 1:
+                    if use_predictor:
+                        if args.use_tta and len(tta_transforms) > 1:
+                            probs = apply_tta_to_predictions(predictor.models[0], batch, tta_transforms, device)
+                        else:
+                            probs = predictor.predict(batch)
+                    elif args.use_tta and len(tta_transforms) > 1:
                         probs = apply_tta_to_predictions(model, batch, tta_transforms, device)
                     else:
                         outputs = model(batch)

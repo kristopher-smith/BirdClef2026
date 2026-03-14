@@ -258,6 +258,8 @@ python src/validate_submission.py --submission submission.csv
 11. `src/train.py`: ✅ Add --embedding_model support (Phase 6)
 12. `src/tta.py`: ✅ Test-Time Augmentation (Phase 7)
 13. `src/predict.py`: ✅ Add TTA support (Phase 7)
+14. `src/ensemble.py`: ✅ Model Ensemble (Phase 8)
+15. `src/predict.py`: ✅ Add ensemble support (Phase 8)
 
 ---
 
@@ -402,3 +404,77 @@ print(f'Output shape: {probs.shape}')
 - TTA typically improves mAP by 1-3%
 - More augments = better accuracy but slower inference
 - Recommended: `original,flip` for best speed/accuracy tradeoff
+
+---
+
+## Phase 8: Model Ensemble
+
+### Overview
+Combine multiple models (EfficientNet-B0, B2, short-clip pretrained, PERCH, etc.) to improve predictions through ensemble averaging.
+
+### Changes
+
+#### 8.1 Create Ensemble Module
+**Files**: `src/ensemble.py` (new)
+
+- `EnsembleModel`: Core ensemble class with weighted averaging
+- `EnsemblePredictor`: Predictor wrapper for ensemble inference
+- `create_ensemble_from_dir()`: Auto-discover models in directory
+- `create_ensemble_from_config()`: Load ensemble from JSON config
+
+#### 8.2 Update Prediction Script
+**Files**: `src/predict.py`
+
+- Add `--ensemble` flag
+- Add `--ensemble_config` for JSON config
+- Add `--ensemble_dir` for model directory
+- Add `--ensemble_weights` for custom weights
+- Add `--ensemble_aggregation` (average/max)
+
+#### 8.3 Create Sample Config
+**Files**: `models/ensemble_config.json` (new)
+
+### Usage
+
+**Option 1: Use JSON config**
+```bash
+python src/predict.py --ensemble --ensemble_config models/ensemble_config.json --output submission.csv
+```
+
+**Option 2: Auto-discover models in directory**
+```bash
+python src/predict.py --ensemble --ensemble_dir models --ensemble_pattern "*.pt" --output submission.csv
+```
+
+**Option 3: Single model (baseline)**
+```bash
+python src/predict.py --model models/best_model.pt --output submission.csv
+```
+
+### Ensemble Config Format
+```json
+{
+    "models": [
+        {"path": "models/b0.pt", "weight": 0.3, "backbone": "efficientnet_b0"},
+        {"path": "models/b2.pt", "weight": 0.3, "backbone": "efficientnet_b2"},
+        {"path": "models/short.pt", "weight": 0.2, "backbone": "efficientnet_b0"},
+        {"path": "models/perch.pt", "weight": 0.2, "embedding_model": "perch"}
+    ],
+    "aggregation": "average"
+}
+```
+
+### Testing
+```bash
+# Test ensemble loading
+python -c "
+from src.ensemble import create_ensemble_from_config
+ensemble = create_ensemble_from_config('models/ensemble_config.json', num_classes=234)
+print(f'Loaded {len(ensemble.models)} models')
+"
+```
+
+### Expected Improvements
+- 2-5% mAP improvement over best single model
+- Combining diverse models (different backbones, pretraining) gives best results
+- Equal weights work well; custom weights can help if one model is stronger
