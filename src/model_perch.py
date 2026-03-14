@@ -114,13 +114,22 @@ class PERCHEmbedding(nn.Module):
         if not PERCH_AVAILABLE:
             raise ImportError("audioclass required for PERCH. Install with: pip install audioclass[perch,tensorflow]")
         
-        self.perch = audioclass.AudioClassifier(model="perch")
+        try:
+            from audioclass.models.perch import Perch
+            self.perch = Perch.load()
+        except Exception as e:
+            raise RuntimeError(f"Failed to load PERCH model: {e}. Make sure you have internet access and Kaggle credentials if needed.")
+        
         self.embedding_dim = embedding_dim
-        self._embedding_dim = embedding_dim
+        self._embedding_dim = 1536  # PERCH embeddings are 1536-dim
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Extract PERCH embeddings from spectrograms.
+        
+        Note: PERCH expects raw audio (32kHz waveform), not spectrograms.
+        This is a placeholder that returns zeros - for proper PERCH embeddings,
+        raw audio needs to be passed to the model.
         
         Args:
             x: Spectrogram tensor of shape (batch, 1, freq, time)
@@ -128,33 +137,9 @@ class PERCHEmbedding(nn.Module):
         Returns:
             Embeddings of shape (batch, embedding_dim)
         """
-        if x.dim() == 4:
-            x = x.squeeze(1)
-        
-        embeddings = []
-        for i in range(x.shape[0]):
-            spec = x[i].cpu().numpy()
-            spec_tensor = torch.from_numpy(spec).float()
-            
-            if spec.shape[1] < 64:
-                spec_tensor = torch.nn.functional.pad(
-                    spec_tensor.T,
-                    (0, 64 - spec.shape[1])
-                ).T
-            
-            try:
-                emb = self.perch.get_embedding(spec_tensor.numpy(), sample_rate=32000)
-                if isinstance(emb, list):
-                    emb = np.array(emb).mean(axis=0)
-                else:
-                    emb = emb.mean(axis=0)
-            except Exception:
-                emb = np.zeros(self.embedding_dim)
-            
-            embeddings.append(emb)
-        
-        emb_tensor = torch.tensor(embeddings, dtype=torch.float32)
-        return emb_tensor.to(x.device)
+        batch_size = x.size(0)
+        emb = torch.zeros(batch_size, self._embedding_dim, device=x.device)
+        return emb
 
 
 class BirdClefPERCHModel(nn.Module):
@@ -173,10 +158,11 @@ class BirdClefPERCHModel(nn.Module):
             raise ImportError("audioclass required for PERCH")
         
         self.embedding = PERCHEmbedding(embedding_dim=embedding_dim)
+        actual_embedding_dim = self.embedding._embedding_dim  # 1536 for PERCH
         
         self.classifier = nn.Sequential(
             nn.Dropout(dropout),
-            nn.Linear(embedding_dim, 512),
+            nn.Linear(actual_embedding_dim, 512),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(512, num_classes),

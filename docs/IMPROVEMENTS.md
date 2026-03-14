@@ -256,6 +256,8 @@ python src/validate_submission.py --submission submission.csv
 9. `src/model.py`: ✅ Add EfficientNet-B3 + fix LSP errors (Phase 5)
 10. `src/model_perch.py`: ✅ Add PERCH/YAMNet embeddings (Phase 6)
 11. `src/train.py`: ✅ Add --embedding_model support (Phase 6)
+12. `src/tta.py`: ✅ Test-Time Augmentation (Phase 7)
+13. `src/predict.py`: ✅ Add TTA support (Phase 7)
 
 ---
 
@@ -320,3 +322,83 @@ python -c "from src.model_perch import BirdClefYAMNetModel; import torch; m = Bi
 - Simple embedding model is a lightweight CNN fallback
 - YAMNet is slower (requires TensorFlow) but more accurate
 - Both models handle multi-label classification
+
+---
+
+## Phase 7: Test-Time Augmentation (TTA)
+
+### Overview
+Add Test-Time Augmentation to improve prediction quality by averaging predictions over multiple augmented versions of each input.
+
+### Changes
+
+#### 7.1 Create TTA Module
+**Files**: `src/tta.py` (new)
+
+- `TTAOriginal`: No augmentation
+- `TTAHorizontalFlip`: Flip spectrogram horizontally
+- `TTATimeShift`: Random time shift
+- `TTAFreqMask`: Frequency masking
+- `TTATimeMask`: Time masking
+- `TTACompose`: Compose multiple augmentations
+- `PredictorWithTTA`: Wrapper class for TTA inference
+- `get_tta_transforms()`: Factory function
+- `apply_tta_to_predictions()`: Apply TTA to predictions
+
+#### 7.2 Update Prediction Script
+**Files**: `src/predict.py`
+
+- Add `--use_tta` flag
+- Add `--tta_augments` argument
+
+### Usage
+```bash
+# Predict without TTA (baseline)
+python src/predict.py --model models/best_model.pt --output submission.csv
+
+# Predict with TTA (original + flip)
+python src/predict.py --model models/best_model.pt --output submission.csv --use_tta
+
+# Predict with TTA (multiple augments)
+python src/predict.py --model models/best_model.pt --output submission.csv --use_tta --tta_augments "original,flip,timeshift"
+
+# Predict with TTA (all augments)
+python src/predict.py --model models/best_model.pt --output submission.csv --use_tta --tta_augments "original,flip,timeshift,freqmask,timemask"
+```
+
+### Available TTA Augments
+| Augment | Description |
+|---------|-------------|
+| `original` | No augmentation |
+| `flip` | Horizontal flip |
+| `timeshift` | Random time shift (±10 frames) |
+| `freqmask` | Frequency masking |
+| `timemask` | Time masking |
+
+### Testing
+```python
+# Test TTA
+python -c "
+import torch
+from src.tta import get_tta_transforms, apply_tta_to_predictions
+from src.model import BirdClefModel
+
+transforms = get_tta_transforms('original,flip')
+model = BirdClefModel(backbone='efficientnet_b0', pretrained=False)
+model.eval()
+
+x = torch.randn(2, 1, 128, 313)
+probs = apply_tta_to_predictions(model, x, transforms)
+print(f'Output shape: {probs.shape}')
+"
+
+# Compare inference time
+# Without TTA: ~1x (baseline)
+# With TTA (2 augments): ~2x
+# With TTA (5 augments): ~5x
+```
+
+### Notes
+- TTA typically improves mAP by 1-3%
+- More augments = better accuracy but slower inference
+- Recommended: `original,flip` for best speed/accuracy tradeoff

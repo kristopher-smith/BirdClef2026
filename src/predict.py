@@ -13,6 +13,7 @@ import librosa
 from tqdm import tqdm
 
 from model import BirdClefModel, get_device
+from tta import get_tta_transforms, apply_tta_to_predictions
 
 
 def parse_args():
@@ -25,6 +26,8 @@ def parse_args():
     parser.add_argument("--n_mels", type=int, default=128)
     parser.add_argument("--n_fft", type=int, default=2048)
     parser.add_argument("--hop_length", type=int, default=512)
+    parser.add_argument("--use_tta", action="store_true", help="Use Test-Time Augmentation")
+    parser.add_argument("--tta_augments", type=str, default="original,flip", help="TTA augmentations (comma-separated: original,flip,timeshift,freqmask,timemask)")
     return parser.parse_args()
 
 
@@ -96,6 +99,9 @@ def main():
     print(f"  Data dir: {args.data_dir}")
     print(f"  Model: {args.model}")
     print(f"  Output: {args.output}")
+    print(f"  TTA: {args.use_tta}")
+    if args.use_tta:
+        print(f"  TTA augments: {args.tta_augments}")
     
     device = get_device()
     print(f"  Device: {device}")
@@ -157,11 +163,19 @@ def main():
             batch_size = args.batch_size
             predictions = []
             
+            tta_transforms = None
+            if args.use_tta:
+                tta_transforms = get_tta_transforms(args.tta_augments)
+                print(f"Using {len(tta_transforms)} TTA transforms")
+            
             for i in range(0, len(specs_tensor), batch_size):
                 batch = specs_tensor[i:i+batch_size].to(device)
                 with torch.no_grad():
-                    outputs = model(batch)
-                    probs = torch.sigmoid(outputs)
+                    if args.use_tta and len(tta_transforms) > 1:
+                        probs = apply_tta_to_predictions(model, batch, tta_transforms, device)
+                    else:
+                        outputs = model(batch)
+                        probs = torch.sigmoid(outputs)
                 predictions.append(probs.cpu().numpy())
             
             predictions = np.concatenate(predictions, axis=0)
