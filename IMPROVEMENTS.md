@@ -172,30 +172,84 @@ This leverages more data for representation learning while adapting to multi-lab
 
 ## Command Reference
 
+### Phase 1: Train Soundscapes with Augmentations
 ```bash
-# Phase 1: Train with augmentations
+# Basic training with augmentations
 python src/train.py --epochs 20 --batch_size 16 --use_augment
 
-# Phase 2: Pre-train on short clips
-python src/train_short.py --epochs 15 --data_type short
-
-# Phase 2: Fine-tune on soundscapes
-python src/train.py --epochs 5 --pretrained models/short_pretrain.pt
-
-# Phase 3: Train with B2 backbone
-python src/train.py --model efficientnet_b2 --epochs 30
-
-# Phase 4: Cross-validation
-python src/train_cv.py --folds 5
+# Full augmentation + regularization
+python src/train.py --epochs 20 --batch_size 16 --use_augment --mixup_alpha 0.4 --label_smoothing 0.1 --use_class_weights
 ```
+
+### Phase 2: Pre-train on Short Clips (35k samples)
+```bash
+# Pre-train on short clips with full augmentation
+python src/train_short.py --epochs 15 --batch_size 32 --use_augment --mixup_alpha 0.4 --label_smoothing 0.1 --use_class_weights
+```
+
+### Phase 2: Fine-tune on Soundscapes
+```bash
+# Fine-tune pretrained model on soundscapes
+python src/train.py --epochs 5 --pretrained models/best_short_clip_model.pt --use_augment
+```
+
+### Phase 3: Larger Backbone + Training Enhancements
+```bash
+# Train with EfficientNet-B2, warmup, and early stopping
+python src/train.py --model efficientnet_b2 --epochs 30 --batch_size 12 --use_augment --warmup_epochs 3 --early_stopping_patience 5
+```
+
+### Available Arguments
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--epochs` | Number of training epochs | 10 |
+| `--batch_size` | Batch size | 16/32 |
+| `--lr` | Learning rate | 1e-4 |
+| `--model` | Backbone (efficientnet_b0/b1/b2) | efficientnet_b0 |
+| `--dropout` | Dropout rate | 0.3 |
+| `--use_augment` | Enable SpecAugment + TimeShift | False |
+| `--mixup_alpha` | Mixup alpha (0=disabled) | 0.0 |
+| `--label_smoothing` | Label smoothing factor | 0.0 |
+| `--use_class_weights` | Use inverse frequency weights | False |
+| `--pretrained` | Path to pretrained checkpoint | None |
+| `--warmup_epochs` | Learning rate warmup epochs | 0 |
+| `--early_stopping_patience` | Early stopping patience (0=disabled) | 0 |
+| `--cache_dir` | Spectrogram cache directory | data/cache |
+| `--num_workers` | DataLoader workers | 4 |
+
+### Phase 4: Cross-Validation & Validation
+```bash
+# 5-fold cross-validation with held-out test set
+python src/train_cv.py --folds 5 --held_out_ratio 0.1 --epochs 15 --use_augment
+
+# Validate submission file
+python src/validate_submission.py --submission submission.csv
+```
+
+### CV Script Arguments
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--folds` | Number of CV folds | 5 |
+| `--held_out_ratio` | Held-out test set ratio | 0.1 |
+| `--epochs` | Epochs per fold | 10 |
+| `--use_augment` | Enable augmentations | False |
+
+### Validate Submission Arguments
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--submission` | Path to submission CSV | (required) |
+| `--sample_submission` | Path to sample submission | data/birdclef-2026/sample_submission.csv |
+| `--taxonomy` | Path to taxonomy CSV | data/birdclef-2026/taxonomy.csv |
 
 ---
 
 ## Implementation Order
 
-1. `src/train.py`: Add augmentation support + mAP metrics
-2. `src/dataset.py`: Add ShortClipDataset class
-3. `src/train_short.py`: Support training on short clips
-4. `src/train.py`: Add label smoothing, warmup, early stopping
-5. `src/model.py`: Support EfficientNet-B2/B3
-6. `tests/`: Add evaluation tests (mAP, F1, submission validation)
+1. `src/train.py`: ✅ Add augmentation support + mAP metrics
+2. `src/dataset.py`: ✅ Add ShortClipDataset class  
+3. `src/train_short.py`: ✅ Support training on short clips
+4. `src/train.py`: ✅ Add label smoothing, class weights, pretrained loading
+5. `src/model.py`: ✅ Support EfficientNet-B2 (Phase 3)
+6. `src/train.py`: ✅ Add warmup + early stopping (Phase 3)
+7. `src/train_cv.py`: ✅ 5-fold cross-validation + held-out test (Phase 4)
+8. `src/validate_submission.py`: ✅ Submission validation (Phase 4)
