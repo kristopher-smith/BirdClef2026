@@ -13,7 +13,7 @@ ENV/
 *.wav
 *.ogg
 *.flac
-
+submission.csv
 # Model checkpoints
 *.pth
 *.pt
