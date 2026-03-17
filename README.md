@@ -151,6 +151,11 @@ python src/validate_submission.py --submission submission.csv \
 - Added `MixedEnsemblePredictor` class for spectrogram + waveform models
 - Created sample config: `models/perch_ensemble_config.json`
 
+### Phase 5: Integration Testing (Complete)
+- Created `src/test_perch_integration.py` for full E2E tests
+- Created `src/test_perch_quick.py` for quick tests (skips slow PERCH forward pass)
+- All integration tests passed
+
 ---
 
 ## Changelog

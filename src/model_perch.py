@@ -121,12 +121,16 @@ class PERCHEmbedding(nn.Module):
         - 160000 samples (5 seconds)
         - float32, normalized to [-1, 1]
         
+        Note: PERCH (TensorFlow) runs on CPU. We process on CPU and move results
+        to the original device (GPU if available).
+        
         Args:
             x: Waveform tensor of shape (batch, 160000)
         
         Returns:
             Embeddings of shape (batch, 1280)
         """
+        device = x.device
         batch_size = x.size(0)
         embeddings = []
         
@@ -138,7 +142,9 @@ class PERCHEmbedding(nn.Module):
             
             embeddings.append(emb)
         
-        return torch.tensor(np.array(embeddings), dtype=torch.float32, device=x.device)
+        embeddings_tensor = torch.tensor(np.array(embeddings), dtype=torch.float32)
+        
+        return embeddings_tensor.to(device)
 
 
 class BirdClefPERCHModel(nn.Module):

@@ -272,7 +272,12 @@ def main():
     print(f"  Augmentations: {args.use_augment}")
     print(f"  Data source: {'short clips' if args.use_short_clips else 'soundscapes'}")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
     print(f"  Device: {device}")
 
     data_dir = Path(args.data_dir)
