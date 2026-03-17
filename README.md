@@ -104,6 +104,12 @@ python src/train.py --model efficientnet_b2 --epochs 30 --batch_size 12 \
 
 # Cross-validation with held-out test set
 python src/train_cv.py --folds 5 --held_out_ratio 0.1 --epochs 15 --use_augment
+
+# Train with PERCH embeddings (NOTE: slow - uses raw audio)
+python src/train_perch.py --epochs 10 --batch_size 4 --use_augment
+
+# Train PERCH on short clips (more data)
+python src/train_perch.py --use_short_clips --epochs 10 --batch_size 4
 ```
 
 ---
@@ -117,6 +123,20 @@ python src/validate_submission.py --submission submission.csv \
     --sample_submission data/birdclef-2026/sample_submission.csv \
     --taxonomy data/birdclef-2026/taxonomy.csv
 ```
+
+---
+
+## Changelog
+
+### Phase 1: Audio Dataset (Complete)
+- Added `src/dataset_perch.py` with raw waveform dataset classes
+- Added `load_audio_for_perch()` and `load_audio_segments()` to `src/audio.py`
+- Added PERCH integration section to README
+
+### Phase 2: PERCH Model (Complete)
+- Fixed `PERCHEmbedding` in `src/model_perch.py` to extract actual 1280-dim embeddings
+- Created `src/train_perch.py` for training with PERCH embeddings
+- Updated README with PERCH training examples
 
 ---
 
