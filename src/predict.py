@@ -15,6 +15,12 @@ from tqdm import tqdm
 from model import BirdClefModel, get_device
 from tta import get_tta_transforms, apply_tta_to_predictions
 from ensemble import EnsemblePredictor, create_ensemble_from_config, create_ensemble_from_dir
+from audio import load_audio_for_perch, load_audio_segments
+
+try:
+    from model_perch import BirdClefPERCHModel, PERCH_AVAILABLE
+except ImportError:
+    PERCH_AVAILABLE = False
 
 
 def parse_args():
@@ -22,6 +28,7 @@ def parse_args():
     parser.add_argument("--data_dir", type=str, default="data/birdclef-2026")
     parser.add_argument("--model", type=str, default="models/best_model.pt", help="Model checkpoint path")
     parser.add_argument("--backbone", type=str, default="efficientnet_b0", help="Model backbone (efficientnet_b0/b1/b2/b3)")
+    parser.add_argument("--embedding_model", type=str, default=None, help="Embedding model type (perch, yamnet, simple)")
     parser.add_argument("--output", type=str, default="submission.csv", help="Output submission file")
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--sample_rate", type=int, default=32000)
@@ -85,6 +92,29 @@ def load_and_process_audio(audio_path, sample_rate, n_mels, n_fft, hop_length, d
     return spectrograms, row_ids
 
 
+def load_and_process_audio_for_perch(audio_path, sample_rate=32000, duration=5):
+    """Load audio and create waveforms for each 5-second segment (PERCH format).
+    
+    Returns:
+        waveforms: List of numpy arrays (160000 samples each)
+        row_ids: List of row_id strings
+    """
+    try:
+        segments = load_audio_segments(audio_path, segment_duration=duration, sr=sample_rate)
+    except Exception as e:
+        print(f"Error loading {audio_path}: {e}")
+        return [], []
+
+    waveforms = []
+    row_ids = []
+    
+    for waveform, row_id in segments:
+        waveforms.append(waveform)
+        row_ids.append(row_id)
+    
+    return waveforms, row_ids
+
+
 def predict(model, dataloader, device):
     """Run inference on a batch of spectrograms."""
     model.eval()
@@ -98,6 +128,55 @@ def predict(model, dataloader, device):
             predictions.append(probs.cpu().numpy())
     
     return np.concatenate(predictions, axis=0)
+
+
+def predict_perch(model, audio_paths, device, batch_size=4):
+    """Run inference with PERCH model on audio files.
+    
+    Args:
+        model: PERCH model
+        audio_paths: List of tuples (waveform, row_id)
+        device: torch device
+        batch_size: Batch size
+    
+    Returns:
+        predictions: numpy array of probabilities
+        row_ids: list of row_id strings
+    """
+    model.eval()
+    all_predictions = []
+    all_row_ids = []
+    
+    batch_waveforms = []
+    batch_row_ids = []
+    
+    with torch.no_grad():
+        for waveform, row_id in tqdm(audio_paths, desc="Predicting with PERCH"):
+            batch_waveforms.append(waveform)
+            batch_row_ids.append(row_id)
+            
+            if len(batch_waveforms) >= batch_size:
+                waveforms_tensor = torch.tensor(np.array(batch_waveforms), dtype=torch.float32)
+                waveforms_tensor = waveforms_tensor.to(device)
+                
+                outputs = model(waveforms_tensor)
+                probs = torch.sigmoid(outputs)
+                all_predictions.append(probs.cpu().numpy())
+                all_row_ids.extend(batch_row_ids)
+
+                batch_waveforms = []
+                batch_row_ids = []
+
+        if batch_waveforms:
+            waveforms_tensor = torch.tensor(np.array(batch_waveforms), dtype=torch.float32)
+            waveforms_tensor = waveforms_tensor.to(device)
+
+            outputs = model(waveforms_tensor)
+            probs = torch.sigmoid(outputs)
+            all_predictions.append(probs.cpu().numpy())
+            all_row_ids.extend(batch_row_ids)
+
+    return np.concatenate(all_predictions, axis=0), all_row_ids
 
 
 def main():
@@ -146,10 +225,23 @@ def main():
         print(f"  Ensemble: {len(predictor.models)} models loaded")
     else:
         print(f"  Model: {args.model}")
-        print(f"  Backbone: {args.backbone}")
-        model = BirdClefModel(num_classes=len(label_cols), pretrained=False, backbone=args.backbone)
+        
+        if args.embedding_model == "perch":
+            print(f"  Embedding model: PERCH")
+            if not PERCH_AVAILABLE:
+                print("ERROR: PERCH not available. Install audioclass[perch,tensorflow]")
+                return
+            model = BirdClefPERCHModel(
+                num_classes=len(label_cols),
+                pretrained=False,
+                dropout=0.3,
+            )
+        else:
+            print(f"  Backbone: {args.backbone}")
+            model = BirdClefModel(num_classes=len(label_cols), pretrained=False, backbone=args.backbone)
+        
         checkpoint = torch.load(args.model, map_location=device, weights_only=False)
-        model.load_state_dict(checkpoint['model_state_dict'])
+        model.load_state_dict(checkpoint['model_state_dict'], strict=False)
         model = model.to(device)
         print(f"Loaded model from epoch {checkpoint.get('epoch', 'unknown')}")
     
@@ -179,49 +271,77 @@ def main():
         test_files = list(test_dir.glob("*.ogg"))
         print(f"Processing {len(test_files)} test files...")
         
+        use_perch = args.embedding_model == "perch" or (
+            not args.ensemble and args.model and "perch" in args.model.lower()
+        )
+        
+        if use_perch:
+            print("Using PERCH mode - loading raw audio waveforms")
+            perch_batch_size = min(args.batch_size, 4)
+        
         for audio_path in tqdm(test_files, desc="Processing audio"):
-            spectrograms, row_ids = load_and_process_audio(
-                audio_path,
-                args.sample_rate,
-                args.n_mels,
-                args.n_fft,
-                args.hop_length
-            )
-            
-            if not spectrograms:
-                continue
-            
-            specs_tensor = torch.tensor(np.array(spectrograms)).unsqueeze(1)
-            
-            batch_size = args.batch_size
-            predictions = []
-            
-            tta_transforms = None
-            use_predictor = predictor is not None
-            
-            if args.use_tta:
-                tta_transforms = get_tta_transforms(args.tta_augments)
-                print(f"Using {len(tta_transforms)} TTA transforms")
-            
-            for i in range(0, len(specs_tensor), batch_size):
-                batch = specs_tensor[i:i+batch_size].to(device)
-                with torch.no_grad():
-                    if use_predictor:
-                        if args.use_tta and len(tta_transforms) > 1:
-                            probs = apply_tta_to_predictions(predictor.models[0], batch, tta_transforms, device)
+            if use_perch:
+                waveforms, row_ids = load_and_process_audio_for_perch(
+                    audio_path,
+                    sample_rate=args.sample_rate,
+                    duration=5
+                )
+                
+                if not waveforms:
+                    continue
+                
+                predictions, file_row_ids = predict_perch(
+                    model,
+                    list(zip(waveforms, row_ids)),
+                    device,
+                    batch_size=perch_batch_size
+                )
+                
+                all_predictions.append(predictions)
+                all_row_ids.extend(file_row_ids)
+            else:
+                spectrograms, row_ids = load_and_process_audio(
+                    audio_path,
+                    args.sample_rate,
+                    args.n_mels,
+                    args.n_fft,
+                    args.hop_length
+                )
+                
+                if not spectrograms:
+                    continue
+                
+                specs_tensor = torch.tensor(np.array(spectrograms)).unsqueeze(1)
+                
+                batch_size = args.batch_size
+                predictions = []
+                
+                tta_transforms = None
+                use_predictor = predictor is not None
+                
+                if args.use_tta:
+                    tta_transforms = get_tta_transforms(args.tta_augments)
+                    print(f"Using {len(tta_transforms)} TTA transforms")
+                
+                for i in range(0, len(specs_tensor), batch_size):
+                    batch = specs_tensor[i:i+batch_size].to(device)
+                    with torch.no_grad():
+                        if use_predictor:
+                            if args.use_tta and len(tta_transforms) > 1:
+                                probs = apply_tta_to_predictions(predictor.models[0], batch, tta_transforms, device)
+                            else:
+                                probs = predictor.predict(batch)
+                        elif args.use_tta and len(tta_transforms) > 1:
+                            probs = apply_tta_to_predictions(model, batch, tta_transforms, device)
                         else:
-                            probs = predictor.predict(batch)
-                    elif args.use_tta and len(tta_transforms) > 1:
-                        probs = apply_tta_to_predictions(model, batch, tta_transforms, device)
-                    else:
-                        outputs = model(batch)
-                        probs = torch.sigmoid(outputs)
-                predictions.append(probs.cpu().numpy())
-            
-            predictions = np.concatenate(predictions, axis=0)
-            
-            all_predictions.append(predictions)
-            all_row_ids.extend(row_ids)
+                            outputs = model(batch)
+                            probs = torch.sigmoid(outputs)
+                    predictions.append(probs.cpu().numpy())
+                
+                predictions = np.concatenate(predictions, axis=0)
+                
+                all_predictions.append(predictions)
+                all_row_ids.extend(row_ids)
         
         predictions_array = np.concatenate(all_predictions, axis=0)
         

@@ -4,13 +4,13 @@ import torch
 import torch.nn as nn
 import numpy as np
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 import json
 
 from model import BirdClefModel, get_device
 
 try:
-    from model_perch import create_embedding_model
+    from model_perch import create_embedding_model, BirdClefPERCHModel
     PERCH_AVAILABLE = True
 except ImportError:
     PERCH_AVAILABLE = False
@@ -277,3 +277,125 @@ def create_ensemble_from_config(
         model_types=model_types,
         embedding_models=embedding_models,
     )
+
+
+def create_perch_ensemble(
+    model_paths: List[str],
+    num_classes: int = 234,
+    device: str = "cpu",
+    weights: Optional[List[float]] = None,
+    aggregation: str = "average",
+) -> EnsemblePredictor:
+    """
+    Create an ensemble of PERCH models.
+    
+    Args:
+        model_paths: List of paths to PERCH model checkpoints
+        num_classes: Number of classes
+        device: Device to run on
+        weights: Weights for each model
+        aggregation: 'average' or 'max'
+    
+    Returns:
+        EnsemblePredictor with PERCH models
+    """
+    if not PERCH_AVAILABLE:
+        raise RuntimeError("PERCH not available. Install audioclass[perch,tensorflow]")
+    
+    embedding_models = ["perch"] * len(model_paths)
+    model_types = ["efficientnet_b0"] * len(model_paths)
+    
+    return EnsemblePredictor(
+        model_paths=model_paths,
+        num_classes=num_classes,
+        device=device,
+        weights=weights,
+        aggregation=aggregation,
+        model_types=model_types,
+        embedding_models=embedding_models,
+    )
+
+
+class MixedEnsemblePredictor:
+    """Ensemble that handles mixed input types (spectrogram + waveform).
+    
+    This predictor automatically routes inputs to appropriate models:
+    - Spectrogram models: EfficientNet, etc.
+    - Waveform models: PERCH, YAMNet
+    """
+    
+    def __init__(
+        self,
+        spectrogram_models: List[nn.Module],
+        waveform_models: List[nn.Module],
+        weights: Optional[List[float]] = None,
+        aggregation: str = "average",
+        device: str = "cpu",
+    ):
+        """
+        Initialize mixed ensemble predictor.
+        
+        Args:
+            spectrogram_models: Models that expect spectrograms (batch, 1, freq, time)
+            waveform_models: Models that expect waveforms (batch, 160000)
+            weights: Weights for each model
+            aggregation: 'average' or 'max'
+            device: Device to run on
+        """
+        self.spectrogram_models = nn.ModuleList(spectrogram_models)
+        self.waveform_models = nn.ModuleList(waveform_models)
+        self.device = device
+        
+        total_models = len(spectrogram_models) + len(waveform_models)
+        self.weights = weights if weights else [1.0 / total_models] * total_models
+        self.aggregation = aggregation
+        
+        if len(self.weights) != total_models:
+            raise ValueError("Number of weights must match total number of models")
+    
+    def predict(
+        self,
+        spectrograms: Optional[torch.Tensor] = None,
+        waveforms: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Predict with mixed ensemble.
+        
+        Args:
+            spectrograms: Input spectrograms (batch, 1, freq, time)
+            waveforms: Input waveforms (batch, 160000)
+        
+        Returns:
+            Averaged probabilities
+        """
+        all_probs = []
+        
+        for i, model in enumerate(self.spectrogram_models):
+            if spectrograms is None:
+                continue
+            weight = self.weights[i]
+            with torch.no_grad():
+                spectrograms = spectrograms.to(self.device)
+                logits = model(spectrograms)
+                probs = torch.sigmoid(logits) * weight
+                all_probs.append(probs)
+        
+        for i, model in enumerate(self.waveform_models):
+            if waveforms is None:
+                continue
+            weight = self.weights[len(self.spectrogram_models) + i]
+            with torch.no_grad():
+                waveforms = waveforms.to(self.device)
+                logits = model(waveforms)
+                probs = torch.sigmoid(logits) * weight
+                all_probs.append(probs)
+        
+        if not all_probs:
+            raise ValueError("No inputs provided")
+        
+        if self.aggregation == "average":
+            return torch.stack(all_probs).sum(dim=0)
+        elif self.aggregation == "max":
+            return torch.stack(all_probs).max(dim=0)[0]
+        else:
+            raise ValueError(f"Unknown aggregation: {self.aggregation}")

@@ -138,6 +138,27 @@ python src/validate_submission.py --submission submission.csv \
 - Created `src/train_perch.py` for training with PERCH embeddings
 - Updated README with PERCH training examples
 
+### Phase 3: Prediction & Inference (Complete)
+- Added PERCH inference support to `src/predict.py`
+- Added `load_and_process_audio_for_perch()` for raw waveform loading
+- Added `predict_perch()` function for PERCH model inference
+- Updated `src/ensemble.py` with `MixedEnsemblePredictor` for mixed input types
+- Added `--embedding_model` argument to predict.py
+
+---
+
+## Changelog
+
+### Phase 1: Audio Dataset (Complete)
+- Added `src/dataset_perch.py` with raw waveform dataset classes
+- Added `load_audio_for_perch()` and `load_audio_segments()` to `src/audio.py`
+- Added PERCH integration section to README
+
+### Phase 2: PERCH Model (Complete)
+- Fixed `PERCHEmbedding` in `src/model_perch.py` to extract actual 1280-dim embeddings
+- Created `src/train_perch.py` for training with PERCH embeddings
+- Updated README with PERCH training examples
+
 ---
 
 ## Changelog
