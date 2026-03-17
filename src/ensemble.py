@@ -247,9 +247,21 @@ def create_ensemble_from_config(
     ```
     
     Args:
-        config_path: Path to JSON config
-        num_classes: Number of classes
-        device: Device to run on
+    config_path: Path to JSON config
+    num_classes: Number of classes
+    device: Device to run on
+
+    Config format:
+    ```json
+    {
+        "models": [
+            {"path": "models/best_b0.pt", "weight": 0.3, "backbone": "efficientnet_b0", "input_type": "spectrogram"},
+            {"path": "models/best_b2.pt", "weight": 0.3, "backbone": "efficientnet_b2", "input_type": "spectrogram"},
+            {"path": "models/perch.pt", "weight": 0.4, "embedding_model": "perch", "input_type": "audio"}
+        ],
+        "aggregation": "average"
+    }
+    ```
     
     Returns:
         EnsemblePredictor instance
@@ -261,12 +273,14 @@ def create_ensemble_from_config(
     weights = []
     model_types = []
     embedding_models = []
+    input_types = []
     
     for model_config in config.get("models", []):
         model_paths.append(model_config["path"])
         weights.append(model_config.get("weight", 1.0))
         model_types.append(model_config.get("backbone", "efficientnet_b0"))
         embedding_models.append(model_config.get("embedding_model", None))
+        input_types.append(model_config.get("input_type", "spectrogram"))
     
     return EnsemblePredictor(
         model_paths=model_paths,

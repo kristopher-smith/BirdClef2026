@@ -169,6 +169,7 @@ class BirdClefAudioClipDataset(Dataset):
         df = pd.read_csv(self.csv_path)
         df = df[df['primary_label'].isin(self.label_cols)]
         self.df = df.reset_index(drop=True)
+        self.labels_df = self.df  # Alias for compatibility
 
     def _get_audio_path(self, primary_label: str, filename: str) -> Path:
         """Find the audio file path given primary_label and filename."""

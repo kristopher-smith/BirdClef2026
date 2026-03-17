@@ -22,7 +22,7 @@ from tqdm import tqdm
 
 from dataset_perch import BirdClefAudioDataset, BirdClefAudioClipDataset
 from model_perch import BirdClefPERCHModel, create_embedding_model, PERCH_AVAILABLE
-from augmentation import SpecAugment, TimeShift, Mixup, Compose
+from augmentation import SpecAugment, TimeShift, Mixup, Compose, WaveformTimeShift, WaveformNoise
 from tracking import MetricsLogger, mlflow_track, attach_logger
 from typing import Optional
 
@@ -123,7 +123,8 @@ def compute_f1_at_k(probs, labels, k=10):
 def get_augmentation_transform():
     """Create augmentation pipeline for audio waveforms."""
     return Compose([
-        TimeShift(max_shift=10000),  # ~0.3 seconds at 32kHz
+        WaveformTimeShift(max_shift=10000),  # ~0.3 seconds at 32kHz
+        WaveformNoise(noise_level=0.005),
     ])
 
 

@@ -145,6 +145,12 @@ python src/validate_submission.py --submission submission.csv \
 - Updated `src/ensemble.py` with `MixedEnsemblePredictor` for mixed input types
 - Added `--embedding_model` argument to predict.py
 
+### Phase 4: Ensemble Integration (Complete)
+- Updated ensemble config schema to support `input_type` field
+- Added `create_perch_ensemble()` helper function
+- Added `MixedEnsemblePredictor` class for spectrogram + waveform models
+- Created sample config: `models/perch_ensemble_config.json`
+
 ---
 
 ## Changelog
