@@ -32,6 +32,7 @@ python src/predict.py --model models/best_model.pt --output submission.csv
 | `src/train.py` | Train on soundscape data |
 | `src/train_short.py` | Pre-train on short clips (35k samples) |
 | `src/train_cv.py` | Cross-validation with held-out test |
+| `src/train_perch.py` | Train with PERCH embeddings (raw audio) |
 
 ### Training Arguments
 
@@ -112,8 +113,19 @@ python src/train_cv.py --folds 5 --held_out_ratio 0.1 --epochs 15 --use_augment
 ### Prediction Script
 
 ```bash
-python src/predict.py --model models/best_model.pt --output submission.csv
+python src/validate_submission.py --submission submission.csv \
+    --sample_submission data/birdclef-2026/sample_submission.csv \
+    --taxonomy data/birdclef-2026/taxonomy.csv
 ```
+
+---
+
+## Changelog
+
+### Phase 1: Audio Dataset (Complete)
+- Added `src/dataset_perch.py` with raw waveform dataset classes
+- Added `load_audio_for_perch()` and `load_audio_segments()` to `src/audio.py`
+- Added PERCH integration section to README
 
 ### Prediction Arguments
 
@@ -309,6 +321,49 @@ attach_logger(train_one_epoch, logger)
 2. **Fine-tune**: Soundscapes (1.5k samples) for 5 epochs
 
 This leverages more data for representation learning while adapting to multi-label format.
+
+---
+
+## PERCH Integration
+
+### Audio Format Requirements
+
+PERCH requires raw audio waveforms instead of spectrograms:
+
+| Parameter | Value |
+|-----------|-------|
+| Sample Rate | 32 kHz |
+| Duration | 5 seconds |
+| Samples | 160,000 (5 sec × 32kHz) |
+| Format | float32, normalized to [-1, 1] |
+
+### Dataset Classes
+
+| Class | Purpose | Input |
+|-------|---------|-------|
+| `BirdClefAudioDataset` | Training on soundscapes | Raw waveform |
+| `BirdClefAudioClipDataset` | Training on short clips | Raw waveform |
+| `BirdClefTestAudioDataset` | Test inference | Raw waveform |
+
+### Audio Utilities
+
+```python
+from audio import load_audio_for_perch, load_audio_segments
+
+# Load single 5-second segment
+waveform = load_audio_for_perch("audio.ogg", sr=32000, duration=5.0, offset=10.0)
+
+# Load all 5-second segments from file
+segments = load_audio_segments("audio.ogg", segment_duration=5.0, sr=32000)
+# Returns: [(waveform, row_id), ...]
+```
+
+### Cache Directories
+
+| Input Type | Cache Directory |
+|------------|----------------|
+| Spectrograms | `data/cache/` |
+| Raw audio (PERCH) | `data/cache_audio/` |
 
 ---
 

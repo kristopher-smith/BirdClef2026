@@ -137,10 +137,18 @@ def get_augmentation_transform():
 
 def compute_class_weights(labels_df, label_cols, device):
     """Compute inverse frequency class weights for imbalanced data."""
-    class_counts = labels_df[label_cols].sum().values
-    class_counts = np.maximum(class_counts, 1)
-    weights = len(labels_df) / (len(label_cols) * class_counts)
-    weights = torch.FloatTensor(weights).to(device)
+    if 'primary_label' in labels_df.columns:
+        class_counts = labels_df['primary_label'].value_counts()
+        weights = torch.ones(len(label_cols), device=device)
+        for i, label in enumerate(label_cols):
+            if label in class_counts.index:
+                weights[i] = len(labels_df) / (len(label_cols) * class_counts[label])
+        return weights
+    else:
+        class_counts = labels_df[label_cols].sum().values
+        class_counts = np.maximum(class_counts, 1)
+        weights = len(labels_df) / (len(label_cols) * class_counts)
+        weights = torch.FloatTensor(weights).to(device)
     return weights
 
 
