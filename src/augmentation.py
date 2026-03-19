@@ -1,8 +1,48 @@
-"""Data augmentation for spectrograms."""
+"""Data augmentation for spectrograms and waveforms."""
 
 import torch
 import torch.nn as nn
 import numpy as np
+
+
+class WaveformTimeShift:
+    """Random time shift for 1D waveforms."""
+
+    def __init__(self, max_shift: int = 10000):
+        self.max_shift = max_shift
+
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        shift = np.random.randint(-self.max_shift, self.max_shift)
+        if shift == 0:
+            return x
+        
+        if shift > 0:
+            return torch.cat([x[shift:], x[:shift]], dim=-1)
+        else:
+            return torch.cat([x[shift:], x[:shift]], dim=-1)
+
+
+class WaveformNoise:
+    """Add Gaussian noise to waveform."""
+
+    def __init__(self, noise_level: float = 0.005):
+        self.noise_level = noise_level
+
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        noise = torch.randn_like(x) * self.noise_level
+        return x + noise
+
+
+class WaveformVolume:
+    """Random volume perturbation for waveforms."""
+
+    def __init__(self, min_scale: float = 0.8, max_scale: float = 1.2):
+        self.min_scale = min_scale
+        self.max_scale = max_scale
+
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        scale = np.random.uniform(self.min_scale, self.max_scale)
+        return x * scale
 
 
 class SpecAugment:

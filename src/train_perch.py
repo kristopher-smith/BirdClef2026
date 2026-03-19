@@ -1,10 +1,7 @@
-"""Training script for BirdClef 2026."""
+"""Training script for BirdClef 2026 with PERCH embeddings."""
 ## To run:
-## python src/train.py --num_workers 4 --use_augment --mixup_alpha 0.4 --label_smoothing 0.1 --use_class_weights --model efficientnet_b2 --epochs 30 --batch_size 12 --use_augment --warmup_epochs 3 --early_stopping_patience 5 --folds 5 --held_out_ratio 0.1
-## With Kaggle upload: python src/train.py --upload_to_kaggle --kaggle_dataset_slug "birdclef2026-model"
-"""
-Upload model manually after training: source .venv/bin/activate && kaggle datasets version -p model_upload/ -m "Updated model from latest training run"
-"""
+## python src/train_perch.py --num_workers 4 --use_augment --mixup_alpha 0.4 --label_smoothing 0.1 --use_class_weights --epochs 30 --batch_size 4 --use_augment --warmup_epochs 3 --early_stopping_patience 5
+## NOTE: PERCH is slow - batch_size is small by default (4) due to embedding extraction time
 
 import argparse
 import os
@@ -23,69 +20,26 @@ from torch.utils.data import DataLoader, Subset
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
-from dataset import BirdClefDataset
-from model import BirdClefModel, get_device
-from augmentation import SpecAugment, TimeShift, Mixup, Compose
+from dataset_perch import BirdClefAudioDataset, BirdClefAudioClipDataset
+from model_perch import BirdClefPERCHModel, create_embedding_model, PERCH_AVAILABLE
+from augmentation import SpecAugment, TimeShift, Mixup, Compose, WaveformTimeShift, WaveformNoise
 from tracking import MetricsLogger, mlflow_track, attach_logger
 from typing import Optional
 
-try:
-    from model_perch import create_embedding_model
-    PERCH_AVAILABLE = True
-except ImportError:
-    PERCH_AVAILABLE = False
-
-
-def upload_to_kaggle(model_path: Path, dataset_slug: str, version_notes: str = ""):
-    """Upload or update model to Kaggle dataset."""
-    import kaggle
-    
-    dataset_ref = f"krist0phersmith/{dataset_slug}"
-    upload_dir = Path("model_upload")
-    upload_dir.mkdir(exist_ok=True)
-    
-    (upload_dir / "best_model.pt").symlink_to(model_path.resolve())
-    
-    metadata = {
-        "title": "BirdClef2026 Model",
-        "id": dataset_ref,
-        "licenses": [{"name": "CC0-1.0"}]
-    }
-    with open(upload_dir / "dataset-metadata.json", "w") as f:
-        json.dump(metadata, f)
-    
-    try:
-        subprocess.run(
-            ["kaggle", "datasets", "version", "-p", str(upload_dir), "-m", version_notes],
-            check=True
-        )
-        print(f"Successfully updated dataset: {dataset_ref}")
-        return True
-    except subprocess.CalledProcessError:
-        try:
-            subprocess.run(
-                ["kaggle", "datasets", "create", "-p", str(upload_dir)],
-                check=True
-            )
-            print(f"Successfully created dataset: {dataset_ref}")
-            return True
-        except subprocess.CalledProcessError as e:
-            print(f"Failed to upload to Kaggle: {e}")
-            return False
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['JAX_PLATFORMS'] = 'cpu'
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train BirdClef 2026 model")
+    parser = argparse.ArgumentParser(description="Train BirdClef 2026 with PERCH embeddings")
     parser.add_argument("--data_dir", type=str, default="data/birdclef-2026")
     parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--batch_size", type=int, default=4, help="Small batch size due to PERCH slow processing")
     parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--num_workers", type=int, default=4)
-    parser.add_argument("--model", type=str, default="efficientnet_b0", help="Backbone model (efficientnet_b0/b1/b2/b3 or yamnet/simple)")
-    parser.add_argument("--embedding_model", type=str, default=None, help="Embedding model type (yamnet, simple) - overrides --model")
+    parser.add_argument("--num_workers", type=int, default=2, help="Fewer workers to avoid memory issues")
     parser.add_argument("--dropout", type=float, default=0.3)
-    parser.add_argument("--cache_dir", type=str, default="data/cache")
-    parser.add_argument("--checkpoint_dir", type=str, default="models")
+    parser.add_argument("--cache_dir", type=str, default="data/cache_audio")
+    parser.add_argument("--checkpoint_dir", type=str, default="models/perch")
     parser.add_argument("--use_cache", action="store_true", default=True)
     parser.add_argument("--test", action="store_true", help="Quick test run with 1 epoch")
     parser.add_argument("--use_augment", action="store_true", help="Use data augmentation")
@@ -96,63 +50,13 @@ def parse_args():
     parser.add_argument("--warmup_epochs", type=int, default=0, help="Number of warmup epochs")
     parser.add_argument("--early_stopping_patience", type=int, default=0, help="Early stopping patience (0 to disable)")
     parser.add_argument("--upload_to_kaggle", action="store_true", help="Upload model to Kaggle after training")
-    parser.add_argument("--kaggle_dataset_slug", type=str, default="birdclef2026-model", help="Kaggle dataset slug")
-    parser.add_argument("--mlflow_experiment", type=str, default="birdclef2026", help="MLflow experiment name")
+    parser.add_argument("--kaggle_dataset_slug", type=str, default="birdclef2026-perch", help="Kaggle dataset slug")
+    parser.add_argument("--mlflow_experiment", type=str, default="birdclef2026_perch", help="MLflow experiment name")
     parser.add_argument("--mlflow_run_name", type=str, default=None, help="MLflow run name")
     parser.add_argument("--mlflow_tracking_uri", type=str, default=None, help="MLflow tracking URI")
+    parser.add_argument("--use_short_clips", action="store_true", help="Train on short clips instead of soundscapes")
+    parser.add_argument("--embedding_dim", type=int, default=1280, help="PERCH embedding dimension")
     return parser.parse_args()
-
-
-def get_model(backbone: str, num_classes: int, dropout: float, checkpoint_path: Optional[str] = None, embedding_model: Optional[str] = None):
-    """Create model based on backbone name."""
-    
-    model_type = embedding_model if embedding_model else backbone
-    
-    if model_type in ["yamnet", "perch", "simple"]:
-        if not PERCH_AVAILABLE:
-            print(f"Warning: {model_type} not available. Installing dependencies...")
-            print("Run: pip install audioclass[perch,tensorflow] for PERCH or tensorflow tf-keras for YAMNet")
-            print("Falling back to efficientnet_b0")
-            model_type = "efficientnet_b0"
-        else:
-            from model_perch import create_embedding_model as _create_embedding_model, YAMNET_AVAILABLE, PERCH_AVAILABLE as _PERCH_AVAILABLE
-            
-            if model_type == "yamnet" and not YAMNET_AVAILABLE:
-                print(f"Warning: YAMNet not available (TensorFlow not installed).")
-                print("Run: pip install tensorflow tf-keras tensorflow-hub")
-                print("Falling back to efficientnet_b0")
-                model_type = "efficientnet_b0"
-            elif model_type == "perch" and not _PERCH_AVAILABLE:
-                print(f"Warning: PERCH not available (audioclass not installed).")
-                print("Run: pip install audioclass[perch,tensorflow]")
-                print("Falling back to efficientnet_b0")
-                model_type = "efficientnet_b0"
-            else:
-                model = _create_embedding_model(
-                    model_type=model_type,
-                    num_classes=num_classes,
-                    pretrained=True,
-                    dropout=dropout,
-                )
-                if checkpoint_path:
-                    print(f"Loading pretrained weights from {checkpoint_path}")
-                    checkpoint = torch.load(checkpoint_path, map_location='cpu')
-                    model.load_state_dict(checkpoint['model_state_dict'], strict=False)
-                return model
-    
-    model = BirdClefModel(
-        num_classes=num_classes,
-        backbone=backbone,
-        pretrained=True,
-        dropout=dropout,
-    )
-    
-    if checkpoint_path:
-        print(f"Loading pretrained weights from {checkpoint_path}")
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
-        model.load_state_dict(checkpoint['model_state_dict'], strict=False)
-    
-    return model
 
 
 def compute_ap(recalls, precisions):
@@ -217,10 +121,10 @@ def compute_f1_at_k(probs, labels, k=10):
 
 
 def get_augmentation_transform():
-    """Create augmentation pipeline."""
+    """Create augmentation pipeline for audio waveforms."""
     return Compose([
-        SpecAugment(freq_mask_param=15, time_mask_param=35, num_freq_masks=2, num_time_masks=2),
-        TimeShift(max_shift=30),
+        WaveformTimeShift(max_shift=10000),  # ~0.3 seconds at 32kHz
+        WaveformNoise(noise_level=0.005),
     ])
 
 
@@ -329,6 +233,11 @@ def validate(model, dataloader, criterion, device):
 def main():
     args = parse_args()
 
+    if not PERCH_AVAILABLE:
+        print("ERROR: PERCH (audioclass) is not available.")
+        print("Install with: pip install audioclass[perch,tensorflow]")
+        sys.exit(1)
+
     logger = MetricsLogger(
         experiment_name=args.mlflow_experiment,
         run_name=args.mlflow_run_name,
@@ -340,7 +249,7 @@ def main():
         'epochs': args.epochs,
         'batch_size': args.batch_size,
         'learning_rate': args.lr,
-        'model': args.model,
+        'embedding_dim': args.embedding_dim,
         'dropout': args.dropout,
         'use_augment': args.use_augment,
         'mixup_alpha': args.mixup_alpha,
@@ -348,48 +257,59 @@ def main():
         'use_class_weights': args.use_class_weights,
         'warmup_epochs': args.warmup_epochs,
         'early_stopping_patience': args.early_stopping_patience,
+        'use_short_clips': args.use_short_clips,
     })
 
     attach_logger(train_one_epoch, logger)
     attach_logger(validate, logger)
 
-    print(f"Training with:")
+    print(f"Training with PERCH embeddings:")
     print(f"  Data dir: {args.data_dir}")
     print(f"  Epochs: {args.epochs if not args.test else 1}")
-    print(f"  Batch size: {args.batch_size}")
+    print(f"  Batch size: {args.batch_size} (small due to PERCH processing time)")
     print(f"  Learning rate: {args.lr}")
-    print(f"  Model: {args.model}")
-    if args.embedding_model:
-        print(f"  Embedding model: {args.embedding_model}")
+    print(f"  Embedding dim: {args.embedding_dim}")
     print(f"  Augmentations: {args.use_augment}")
-    print(f"  Mixup alpha: {args.mixup_alpha}")
-    print(f"  Label smoothing: {args.label_smoothing}")
-    print(f"  Class weights: {args.use_class_weights}")
-    print(f"  Pretrained: {args.pretrained}")
-    print(f"  Warmup epochs: {args.warmup_epochs}")
-    print(f"  Early stopping patience: {args.early_stopping_patience}")
+    print(f"  Data source: {'short clips' if args.use_short_clips else 'soundscapes'}")
 
-    device = get_device()
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
     print(f"  Device: {device}")
 
     data_dir = Path(args.data_dir)
-    train_labels = pd.read_csv(data_dir / "train_soundscapes_labels.csv")
     taxonomy = pd.read_csv(data_dir / "taxonomy.csv")
-    train_audio = data_dir / "train_soundscapes"
 
-    print(f"\nTraining samples: {len(train_labels)}")
+    if args.use_short_clips:
+        train_csv = data_dir / "train.csv"
+        train_audio = data_dir / "train_audio"
+        dataset = BirdClefAudioClipDataset(
+            csv_path=str(train_csv),
+            audio_dir=str(train_audio),
+            taxonomy_df=taxonomy,
+            sample_rate=32000,
+            duration=5,
+            use_cache=args.use_cache,
+            cache_dir=args.cache_dir,
+        )
+    else:
+        train_labels = pd.read_csv(data_dir / "train_soundscapes_labels.csv")
+        train_audio = data_dir / "train_soundscapes"
+        dataset = BirdClefAudioDataset(
+            audio_dir=str(train_audio),
+            labels_df=train_labels,
+            taxonomy_df=taxonomy,
+            sample_rate=32000,
+            duration=5,
+            use_cache=args.use_cache,
+            cache_dir=args.cache_dir,
+        )
+
+    print(f"Training samples: {len(dataset)}")
     print(f"Number of classes: {len(taxonomy)}")
-
-    dataset = BirdClefDataset(
-        audio_dir=str(train_audio),
-        labels_df=train_labels,
-        taxonomy_df=taxonomy,
-        sample_rate=32000,
-        duration=5,
-        n_mels=128,
-        use_cache=args.use_cache,
-        cache_dir=args.cache_dir,
-    )
 
     indices = list(range(len(dataset)))
     train_indices, val_indices = train_test_split(
@@ -415,7 +335,12 @@ def main():
         pin_memory=True,
     )
 
-    model = get_model(args.model, len(taxonomy), args.dropout, args.pretrained, args.embedding_model)
+    model = BirdClefPERCHModel(
+        num_classes=len(taxonomy),
+        pretrained=True,
+        dropout=args.dropout,
+        embedding_dim=args.embedding_dim,
+    )
     model = model.to(device)
 
     if args.use_class_weights:
@@ -456,6 +381,9 @@ def main():
 
     early_stopping_counter = 0
     early_stop = False
+
+    print("\nWARNING: PERCH embedding extraction is slow.")
+    print("Consider using fewer epochs or pre-computing embeddings for production.")
 
     for epoch in range(1, epochs + 1):
         print(f"\n{'='*50}")
@@ -518,41 +446,11 @@ def main():
         if early_stop:
             break
 
-    print("\nComputing final metrics and artifacts...")
-    final_result = validate(model, val_loader, criterion, device)
-    label_cols = dataset.label_cols
-    taxonomy = pd.read_csv(Path(args.data_dir) / "taxonomy.csv")
-    all_species = taxonomy['primary_label'].tolist()
-    
-    if 'all_probs' in final_result and 'all_labels' in final_result:
-        probs = final_result['all_probs']
-        labels = final_result['all_labels']
-        
-        n_classes = labels.shape[1]
-        cm = np.zeros((n_classes, n_classes), dtype=np.int32)
-        
-        for i in range(len(probs)):
-            top_k_indices = np.argsort(-probs[i])[:10]
-            true_labels = np.where(labels[i] == 1)[0]
-            for pred_idx in top_k_indices:
-                for true_idx in true_labels:
-                    if true_idx < n_classes and pred_idx < n_classes:
-                        cm[true_idx, pred_idx] += 1
-        
-        logger.log_confusion_matrix(cm, all_species)
-        
-        logger.log_class_distribution(dataset.labels_df, label_cols)
-
-    logger.end_run()
-
     print("\nTraining complete!")
     print(f"Best validation loss: {best_val_loss:.4f}")
     print(f"Best mAP@10: {best_map:.4f}")
 
-    if args.upload_to_kaggle:
-        print("\nUploading model to Kaggle...")
-        version_notes = f"Trained with {args.model}, mAP@10: {best_map:.4f}, epochs: {epochs}"
-        upload_to_kaggle(checkpoint_path, args.kaggle_dataset_slug, version_notes)
+    logger.end_run()
 
 
 if __name__ == "__main__":

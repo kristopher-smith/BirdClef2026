@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import models
+from torchvision.models import EfficientNet_B0_Weights, EfficientNet_B1_Weights, EfficientNet_B2_Weights, EfficientNet_B3_Weights  # type: ignore[attr-defined]
 
 
 def get_device():
@@ -30,22 +31,28 @@ class BirdClefModel(nn.Module):
         
         if backbone == "efficientnet_b0":
             self.backbone = models.efficientnet_b0(
-                weights=models.EfficientNet_B0_Weights.DEFAULT if pretrained else None
+                weights=EfficientNet_B0_Weights.DEFAULT if pretrained else None
             )
-            in_features = self.backbone.classifier[1].in_features
-            self.backbone.classifier = nn.Identity()
+            in_features: int = self.backbone.classifier[1].in_features  # type: ignore[attr-defined]
+            self.backbone.classifier = nn.Identity()  # type: ignore[attr-defined]
         elif backbone == "efficientnet_b1":
             self.backbone = models.efficientnet_b1(
-                weights=models.EfficientNet_B1_Weights.DEFAULT if pretrained else None
+                weights=EfficientNet_B1_Weights.DEFAULT if pretrained else None
             )
-            in_features = self.backbone.classifier[1].in_features
-            self.backbone.classifier = nn.Identity()
+            in_features = self.backbone.classifier[1].in_features  # type: ignore[attr-defined]
+            self.backbone.classifier = nn.Identity()  # type: ignore[attr-defined]
         elif backbone == "efficientnet_b2":
             self.backbone = models.efficientnet_b2(
-                weights=models.EfficientNet_B2_Weights.DEFAULT if pretrained else None
+                weights=EfficientNet_B2_Weights.DEFAULT if pretrained else None
             )
-            in_features = self.backbone.classifier[1].in_features
-            self.backbone.classifier = nn.Identity()
+            in_features = self.backbone.classifier[1].in_features  # type: ignore[attr-defined]
+            self.backbone.classifier = nn.Identity()  # type: ignore[attr-defined]
+        elif backbone == "efficientnet_b3":
+            self.backbone = models.efficientnet_b3(
+                weights=EfficientNet_B3_Weights.DEFAULT if pretrained else None
+            )
+            in_features = self.backbone.classifier[1].in_features  # type: ignore[attr-defined]
+            self.backbone.classifier = nn.Identity()  # type: ignore[attr-defined]
         else:
             raise ValueError(f"Unknown backbone: {backbone}")
 
@@ -76,16 +83,28 @@ class BirdClefModelWithPool(nn.Module):
         
         if backbone == "efficientnet_b0":
             self.backbone = models.efficientnet_b0(
-                weights=models.EfficientNet_B0_Weights.DEFAULT if pretrained else None
+                weights=EfficientNet_B0_Weights.DEFAULT if pretrained else None
             )
-            in_features = self.backbone.classifier[1].in_features
-            self.backbone.classifier = nn.Identity()
+            in_features: int = self.backbone.classifier[1].in_features  # type: ignore[attr-defined]
+            self.backbone.classifier = nn.Identity()  # type: ignore[attr-defined]
         elif backbone == "efficientnet_b1":
             self.backbone = models.efficientnet_b1(
-                weights=models.EfficientNet_B1_Weights.DEFAULT if pretrained else None
+                weights=EfficientNet_B1_Weights.DEFAULT if pretrained else None
             )
-            in_features = self.backbone.classifier[1].in_features
-            self.backbone.classifier = nn.Identity()
+            in_features = self.backbone.classifier[1].in_features  # type: ignore[attr-defined]
+            self.backbone.classifier = nn.Identity()  # type: ignore[attr-defined]
+        elif backbone == "efficientnet_b2":
+            self.backbone = models.efficientnet_b2(
+                weights=EfficientNet_B2_Weights.DEFAULT if pretrained else None
+            )
+            in_features = self.backbone.classifier[1].in_features  # type: ignore[attr-defined]
+            self.backbone.classifier = nn.Identity()  # type: ignore[attr-defined]
+        elif backbone == "efficientnet_b3":
+            self.backbone = models.efficientnet_b3(
+                weights=EfficientNet_B3_Weights.DEFAULT if pretrained else None
+            )
+            in_features = self.backbone.classifier[1].in_features  # type: ignore[attr-defined]
+            self.backbone.classifier = nn.Identity()  # type: ignore[attr-defined]
         else:
             raise ValueError(f"Unknown backbone: {backbone}")
 
@@ -101,6 +120,8 @@ class BirdClefModelWithPool(nn.Module):
         self.fc = nn.Linear(in_features, num_classes)
 
     def forward(self, x):
+        if x.size(1) == 1:
+            x = x.repeat(1, 3, 1, 1)
         x = self.backbone.features(x)
         x = self.pool(x)
         x = torch.flatten(x, 1)

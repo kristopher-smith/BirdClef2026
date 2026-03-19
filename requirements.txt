@@ -28,3 +28,11 @@ pyyaml>=6.0
 
 # Experiment tracking
 mlflow>=2.0.0
+
+# Audio embeddings (optional - for YAMNet/PERCH)
+# tensorflow>=2.15.0
+# tf-keras>=2.15.0
+# tensorflow-hub>=0.16.0
+
+# Alternative: audioclass with PERCH support
+# pip install audioclass[perch,tensorflow]
